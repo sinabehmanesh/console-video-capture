@@ -54,8 +54,10 @@ struct PSIn {
 };
 
 float4 main(PSIn input) : SV_TARGET {
-    const uint source_width = 1920;
-    const uint source_height = 1080;
+    uint packed_width = 0;
+    uint source_height = 0;
+    yuy2_texture.GetDimensions(packed_width, source_height);
+    uint source_width = packed_width * 2;
 
     uint source_x = min((uint)(saturate(input.uv.x) * source_width), source_width - 1);
     uint source_y = min((uint)(saturate(input.uv.y) * source_height), source_height - 1);
@@ -332,7 +334,7 @@ int main() {
         const HINSTANCE instance = GetModuleHandleW(nullptr);
         HWND window = create_window(instance);
         initialize_d3d(window);
-        std::cout << "Stage 5 running: live 1080p60 YUY2 capture + GPU YUV-to-RGB rendering.\n";
+        std::cout << "Stage 5 running: live 720x480 YUY2 capture + GPU YUV-to-RGB rendering.\n";
         std::cout << "The capture image should now be visible in the D3D11 window.\n";
         std::cout << "Close the window to exit.\n";
         MSG message{};
