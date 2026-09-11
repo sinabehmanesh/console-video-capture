@@ -4,16 +4,19 @@
 #include <mfapi.h>
 #include <objbase.h>
 
+#include <iomanip>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 
 #include "capture_devices.h"
+#include "capture_formats.h"
 
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"PS2CaptureStreamWindowClass";
-constexpr wchar_t kWindowTitle[] = L"PS2 Capture Stream - Stage 2";
+constexpr wchar_t kWindowTitle[] = L"PS2 Capture Stream - Stage 3";
+constexpr wchar_t kPreferredCaptureDevice[] = L"USB3 Video";
 
 struct D3DState {
     ID3D11Device* device = nullptr;
@@ -91,13 +94,13 @@ void throw_if_failed(HRESULT result, const char* message) {
     }
 }
 
-void print_capture_devices() {
+std::vector<CaptureDeviceInfo> print_capture_devices() {
     const auto devices = enumerate_video_capture_devices();
 
     std::wcout << L"Video capture devices found: " << devices.size() << L'\n';
     if (devices.empty()) {
         std::wcout << L"  No video capture devices detected.\n";
-        return;
+        return devices;
     }
 
     for (std::size_t i = 0; i < devices.size(); ++i) {
@@ -109,6 +112,46 @@ void print_capture_devices() {
         if (!device.symbolic_link.empty()) {
             std::wcout << L"    " << device.symbolic_link << L'\n';
         }
+    }
+
+    return devices;
+}
+
+void print_capture_formats(const std::vector<CaptureDeviceInfo>& devices) {
+    const CaptureDeviceInfo* selected = nullptr;
+
+    for (const auto& device : devices) {
+        if (device.name == kPreferredCaptureDevice) {
+            selected = &device;
+            break;
+        }
+    }
+
+    if (selected == nullptr) {
+        std::wcout << L"\nPreferred capture device '" << kPreferredCaptureDevice
+                   << L"' was not found; skipping format enumeration.\n";
+        return;
+    }
+
+    std::wcout << L"\nNative formats for " << selected->name << L":\n";
+
+    const auto formats = enumerate_video_formats(*selected);
+    if (formats.empty()) {
+        std::wcout << L"  No native video formats reported.\n";
+        return;
+    }
+
+    for (std::size_t i = 0; i < formats.size(); ++i) {
+        const auto& format = formats[i];
+        const double fps = format.fps_denominator == 0
+            ? 0.0
+            : static_cast<double>(format.fps_numerator) /
+                static_cast<double>(format.fps_denominator);
+
+        std::wcout << L"[" << std::setw(2) << i << L"] "
+                   << format.width << L"x" << format.height
+                   << L" @ " << std::fixed << std::setprecision(3) << fps
+                   << L" fps - " << format.subtype << L'\n';
     }
 }
 
@@ -211,9 +254,6 @@ void render_frame() {
 
     g_d3d.context->OMSetRenderTargets(1, &g_d3d.render_target, nullptr);
     g_d3d.context->ClearRenderTargetView(g_d3d.render_target, clear_color);
-
-    // Present immediately for now. Stage 4 will revisit presentation strategy
-    // once live capture is connected and we can measure end-to-end latency.
     g_d3d.swap_chain->Present(0, 0);
 }
 
@@ -293,13 +333,14 @@ HWND create_window(HINSTANCE instance) {
 int main() {
     try {
         MediaFoundationRuntime media_foundation;
-        print_capture_devices();
+        const auto devices = print_capture_devices();
+        print_capture_formats(devices);
 
         const HINSTANCE instance = GetModuleHandleW(nullptr);
         HWND window = create_window(instance);
         initialize_d3d(window);
 
-        std::cout << "Stage 2 running: Media Foundation device discovery + D3D11 renderer.\n";
+        std::cout << "Stage 3 running: native capture format discovery + D3D11 renderer.\n";
         std::cout << "Close the window to exit.\n";
 
         MSG message{};
