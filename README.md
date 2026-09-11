@@ -23,7 +23,9 @@ Stage 7 is implemented on `feature/low-latency-capture-preview`:
 - D3D11 pixel-shader YUV -> RGB conversion
 - Live video preview in the application window
 - Centered 4:3 fit mode with black borders
-- Fixed `960x720` centered mode
+- Selectable fixed 4:3 output resolutions: `640x480`, `960x720`, `1280x960`, `1920x1440`
+- Fixed-resolution output remains the same size while the window grows around it
+- The window cannot be resized below the selected fixed output resolution
 - Stretch mode for comparison/debugging
 - Borderless fullscreen on the current monitor
 - Window size and position restored when leaving fullscreen
@@ -32,10 +34,13 @@ Stage 7 is implemented on `feature/low-latency-capture-preview`:
 
 - `F11` - toggle borderless fullscreen
 - `Esc` - leave fullscreen
+- `R` - cycle fixed output resolution
 - `M` - cycle display modes
 - `1` - Fit 4:3
-- `2` - Fixed 960x720
+- `2` - Fixed selected resolution
 - `3` - Stretch
+
+The default mode is fixed `960x720`.
 
 Audio passthrough and deeper latency/statistics tuning are later stages.
 
@@ -62,7 +67,7 @@ Run:
 4. Live low-latency frame capture
 5. GPU YUY2 rendering
 6. Scaling/aspect-ratio modes
-7. Borderless fullscreen
+7. Borderless fullscreen and selectable fixed output sizes
 8. Audio passthrough, latency/statistics tuning, packaging/release
 
 ## Design constraints
