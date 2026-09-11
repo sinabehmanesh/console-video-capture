@@ -6,6 +6,7 @@
 #include <objbase.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -22,12 +23,22 @@ constexpr wchar_t kWindowClassName[] = L"PS2CaptureStreamWindowClass";
 constexpr wchar_t kWindowTitle[] = L"PS2 Capture Stream - Stage 7";
 constexpr wchar_t kCaptureHardwareId[] = L"vid_345f&pid_2131";
 constexpr float kDisplayAspect = 4.0f / 3.0f;
-constexpr UINT kFixedWidth = 960;
-constexpr UINT kFixedHeight = 720;
+
+struct OutputResolution {
+    UINT width;
+    UINT height;
+};
+
+constexpr std::array<OutputResolution, 4> kOutputResolutions{{
+    {640, 480},
+    {960, 720},
+    {1280, 960},
+    {1920, 1440},
+}};
 
 enum class DisplayMode {
     Fit4x3,
-    Fixed960x720,
+    FixedResolution,
     Stretch,
 };
 
@@ -38,7 +49,8 @@ struct WindowState {
     WINDOWPLACEMENT placement{sizeof(WINDOWPLACEMENT)};
 };
 
-DisplayMode g_display_mode = DisplayMode::Fit4x3;
+DisplayMode g_display_mode = DisplayMode::FixedResolution;
+std::size_t g_output_resolution_index = 1;
 WindowState g_window_state;
 
 constexpr char kVertexShaderSource[] = R"(
@@ -155,21 +167,30 @@ void throw_if_failed(HRESULT result, const char* message) {
     if (FAILED(result)) throw std::runtime_error(std::string(message));
 }
 
+const OutputResolution& selected_output_resolution() {
+    return kOutputResolutions[g_output_resolution_index];
+}
+
 const char* display_mode_name(DisplayMode mode) {
     switch (mode) {
     case DisplayMode::Fit4x3: return "Fit 4:3";
-    case DisplayMode::Fixed960x720: return "Fixed 960x720";
+    case DisplayMode::FixedResolution: return "Fixed resolution";
     case DisplayMode::Stretch: return "Stretch";
     }
     return "Unknown";
 }
 
+void print_selected_resolution() {
+    const auto& resolution = selected_output_resolution();
+    std::cout << "Output resolution: " << resolution.width << 'x' << resolution.height << '\n';
+}
+
 void cycle_display_mode() {
     switch (g_display_mode) {
     case DisplayMode::Fit4x3:
-        g_display_mode = DisplayMode::Fixed960x720;
+        g_display_mode = DisplayMode::FixedResolution;
         break;
-    case DisplayMode::Fixed960x720:
+    case DisplayMode::FixedResolution:
         g_display_mode = DisplayMode::Stretch;
         break;
     case DisplayMode::Stretch:
@@ -177,6 +198,44 @@ void cycle_display_mode() {
         break;
     }
     std::cout << "Display mode: " << display_mode_name(g_display_mode) << '\n';
+}
+
+void ensure_window_is_large_enough(HWND window) {
+    if (g_window_state.fullscreen) return;
+
+    const auto& resolution = selected_output_resolution();
+
+    RECT client_rect{};
+    GetClientRect(window, &client_rect);
+    const LONG client_width = client_rect.right - client_rect.left;
+    const LONG client_height = client_rect.bottom - client_rect.top;
+
+    if (client_width >= static_cast<LONG>(resolution.width) &&
+        client_height >= static_cast<LONG>(resolution.height)) {
+        return;
+    }
+
+    RECT window_rect{0, 0, static_cast<LONG>(resolution.width), static_cast<LONG>(resolution.height)};
+    const DWORD style = static_cast<DWORD>(GetWindowLongPtrW(window, GWL_STYLE));
+    const DWORD ex_style = static_cast<DWORD>(GetWindowLongPtrW(window, GWL_EXSTYLE));
+    AdjustWindowRectEx(&window_rect, style, FALSE, ex_style);
+
+    SetWindowPos(
+        window,
+        nullptr,
+        0,
+        0,
+        window_rect.right - window_rect.left,
+        window_rect.bottom - window_rect.top,
+        SWP_NOMOVE | SWP_NOZORDER | SWP_NOOWNERZORDER
+    );
+}
+
+void cycle_output_resolution(HWND window) {
+    g_output_resolution_index = (g_output_resolution_index + 1) % kOutputResolutions.size();
+    g_display_mode = DisplayMode::FixedResolution;
+    print_selected_resolution();
+    ensure_window_is_large_enough(window);
 }
 
 void enter_borderless_fullscreen(HWND window) {
@@ -239,6 +298,7 @@ void exit_borderless_fullscreen(HWND window) {
     }
 
     g_window_state.fullscreen = false;
+    ensure_window_is_large_enough(window);
     std::cout << "Fullscreen: off\n";
 }
 
@@ -267,25 +327,20 @@ D3D11_VIEWPORT calculate_video_viewport() {
     float width = client_width;
     float height = client_height;
 
-    if (g_display_mode == DisplayMode::Fixed960x720) {
-        width = std::min(client_width, static_cast<float>(kFixedWidth));
-        height = width / kDisplayAspect;
-        if (height > client_height) {
-            height = std::min(client_height, static_cast<float>(kFixedHeight));
-            width = height * kDisplayAspect;
-        }
+    if (g_display_mode == DisplayMode::FixedResolution) {
+        const auto& resolution = selected_output_resolution();
+        width = static_cast<float>(resolution.width);
+        height = static_cast<float>(resolution.height);
+    } else if (client_width / client_height > kDisplayAspect) {
+        height = client_height;
+        width = height * kDisplayAspect;
     } else {
-        if (client_width / client_height > kDisplayAspect) {
-            height = client_height;
-            width = height * kDisplayAspect;
-        } else {
-            width = client_width;
-            height = width / kDisplayAspect;
-        }
+        width = client_width;
+        height = width / kDisplayAspect;
     }
 
-    viewport.TopLeftX = (client_width - width) * 0.5f;
-    viewport.TopLeftY = (client_height - height) * 0.5f;
+    viewport.TopLeftX = std::max(0.0f, (client_width - width) * 0.5f);
+    viewport.TopLeftY = std::max(0.0f, (client_height - height) * 0.5f);
     viewport.Width = width;
     viewport.Height = height;
     return viewport;
@@ -543,6 +598,25 @@ void render_frame(CaptureSession& capture) {
 
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l_param) {
     switch (message) {
+    case WM_GETMINMAXINFO:
+        if (!g_window_state.fullscreen) {
+            const auto& resolution = selected_output_resolution();
+            RECT minimum_rect{
+                0,
+                0,
+                static_cast<LONG>(resolution.width),
+                static_cast<LONG>(resolution.height)
+            };
+            const DWORD style = static_cast<DWORD>(GetWindowLongPtrW(window, GWL_STYLE));
+            const DWORD ex_style = static_cast<DWORD>(GetWindowLongPtrW(window, GWL_EXSTYLE));
+            AdjustWindowRectEx(&minimum_rect, style, FALSE, ex_style);
+
+            auto* minmax = reinterpret_cast<MINMAXINFO*>(l_param);
+            minmax->ptMinTrackSize.x = minimum_rect.right - minimum_rect.left;
+            minmax->ptMinTrackSize.y = minimum_rect.bottom - minimum_rect.top;
+        }
+        return 0;
+
     case WM_SIZE:
         if (w_param != SIZE_MINIMIZED && g_d3d.swap_chain != nullptr) {
             try {
@@ -564,6 +638,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
                 exit_borderless_fullscreen(window);
                 return 0;
             }
+            if (w_param == 'R') {
+                cycle_output_resolution(window);
+                return 0;
+            }
             if (w_param == 'M') {
                 cycle_display_mode();
                 return 0;
@@ -574,8 +652,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
                 return 0;
             }
             if (w_param == '2') {
-                g_display_mode = DisplayMode::Fixed960x720;
-                std::cout << "Display mode: Fixed 960x720\n";
+                g_display_mode = DisplayMode::FixedResolution;
+                std::cout << "Display mode: Fixed resolution\n";
+                print_selected_resolution();
+                ensure_window_is_large_enough(window);
                 return 0;
             }
             if (w_param == '3') {
@@ -656,10 +736,12 @@ int main() {
         HWND window = create_window(instance);
         initialize_d3d(window);
 
-        std::cout << "Stage 7 running: live PS2 preview with scaling modes and borderless fullscreen.\n";
-        std::cout << "Default mode: Fit 4:3.\n";
-        std::cout << "Hotkeys: F11 = toggle fullscreen, Esc = leave fullscreen, M = cycle modes.\n";
-        std::cout << "          1 = Fit 4:3, 2 = Fixed 960x720, 3 = Stretch.\n";
+        std::cout << "Stage 7 running: live PS2 preview with fixed output resolutions and borderless fullscreen.\n";
+        std::cout << "Default mode: Fixed resolution.\n";
+        print_selected_resolution();
+        std::cout << "Hotkeys: F11 = toggle fullscreen, Esc = leave fullscreen, R = cycle output resolution.\n";
+        std::cout << "          M = cycle modes, 1 = Fit 4:3, 2 = Fixed resolution, 3 = Stretch.\n";
+        std::cout << "Fixed resolutions: 640x480, 960x720, 1280x960, 1920x1440.\n";
         std::cout << "Close the window to exit.\n";
 
         MSG message{};
