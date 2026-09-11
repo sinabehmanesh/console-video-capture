@@ -247,7 +247,7 @@ void HudRenderer::set_text(std::string text) {
 }
 
 void HudRenderer::update_texture(ID3D11DeviceContext* context) {
-    std::fill(pixels_.begin(), pixels_.end(), 0);
+    std::fill(pixels_.begin(), pixels_.end(), static_cast<unsigned char>(0));
 
     for (UINT y = 0; y < kHudHeight; ++y) {
         for (UINT x = 0; x < kHudWidth; ++x) {
