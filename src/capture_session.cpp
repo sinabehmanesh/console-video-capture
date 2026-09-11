@@ -16,6 +16,9 @@
 namespace {
 
 constexpr DWORD kVideoStream = static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM);
+constexpr std::size_t kRowBytes =
+    static_cast<std::size_t>(CaptureSession::kCaptureWidth) *
+    CaptureSession::kBytesPerPixel;
 
 void throw_if_failed(HRESULT result, const char* message) {
     if (FAILED(result)) {
@@ -93,6 +96,72 @@ IMFMediaType* find_yuy2_1080p60(IMFSourceReader* reader) {
     }
 
     return nullptr;
+}
+
+bool copy_sample_to_frame(IMFSample* sample, std::vector<std::uint8_t>& destination) {
+    IMFMediaBuffer* buffer = nullptr;
+    const HRESULT buffer_result = sample->ConvertToContiguousBuffer(&buffer);
+    if (FAILED(buffer_result) || buffer == nullptr) {
+        return false;
+    }
+
+    bool copied = false;
+
+    IMF2DBuffer* buffer_2d = nullptr;
+    if (SUCCEEDED(buffer->QueryInterface(IID_PPV_ARGS(&buffer_2d))) && buffer_2d != nullptr) {
+        BYTE* scanline = nullptr;
+        LONG pitch = 0;
+        if (SUCCEEDED(buffer_2d->Lock2D(&scanline, &pitch)) && scanline != nullptr) {
+            const std::size_t absolute_pitch =
+                static_cast<std::size_t>(pitch < 0 ? -static_cast<long long>(pitch) : pitch);
+
+            if (absolute_pitch >= kRowBytes) {
+                for (std::uint32_t row = 0; row < CaptureSession::kCaptureHeight; ++row) {
+                    const BYTE* source_row = nullptr;
+                    if (pitch >= 0) {
+                        source_row = scanline + static_cast<std::size_t>(row) * absolute_pitch;
+                    } else {
+                        source_row = scanline - static_cast<std::size_t>(row) * absolute_pitch;
+                    }
+
+                    std::memcpy(
+                        destination.data() + static_cast<std::size_t>(row) * kRowBytes,
+                        source_row,
+                        kRowBytes
+                    );
+                }
+                copied = true;
+            }
+
+            buffer_2d->Unlock2D();
+        }
+        buffer_2d->Release();
+    }
+
+    if (!copied) {
+        BYTE* data = nullptr;
+        DWORD max_length = 0;
+        DWORD current_length = 0;
+
+        if (SUCCEEDED(buffer->Lock(&data, &max_length, &current_length)) && data != nullptr) {
+            if (current_length >= CaptureSession::kFrameBytes) {
+                std::memcpy(destination.data(), data, CaptureSession::kFrameBytes);
+                copied = true;
+            } else {
+                static bool warned_short_buffer = false;
+                if (!warned_short_buffer) {
+                    std::cerr << "Capture sample buffer is smaller than expected: "
+                              << current_length << " bytes, expected at least "
+                              << CaptureSession::kFrameBytes << " bytes.\n";
+                    warned_short_buffer = true;
+                }
+            }
+            buffer->Unlock();
+        }
+    }
+
+    buffer->Release();
+    return copied;
 }
 
 } // namespace
@@ -204,6 +273,7 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
 
         auto last_report = std::chrono::steady_clock::now();
         std::uint64_t frames_at_last_report = 0;
+        bool reported_first_frame = false;
 
         while (!stop_token.stop_requested()) {
             DWORD stream_index = 0;
@@ -232,30 +302,19 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
             }
 
             if (sample != nullptr) {
-                IMFMediaBuffer* buffer = nullptr;
-                const HRESULT buffer_result = sample->ConvertToContiguousBuffer(&buffer);
-
-                if (SUCCEEDED(buffer_result) && buffer != nullptr) {
-                    BYTE* data = nullptr;
-                    DWORD max_length = 0;
-                    DWORD current_length = 0;
-
-                    const HRESULT lock_result = buffer->Lock(
-                        &data,
-                        &max_length,
-                        &current_length
-                    );
-
-                    if (SUCCEEDED(lock_result)) {
-                        if (current_length >= kFrameBytes) {
-                            std::scoped_lock lock(frame_mutex_);
-                            std::memcpy(latest_frame_.data(), data, kFrameBytes);
-                            ++latest_frame_sequence_;
-                        }
-                        buffer->Unlock();
+                std::vector<std::uint8_t> captured_frame(kFrameBytes);
+                if (copy_sample_to_frame(sample, captured_frame)) {
+                    {
+                        std::scoped_lock lock(frame_mutex_);
+                        latest_frame_.swap(captured_frame);
+                        ++latest_frame_sequence_;
                     }
 
-                    buffer->Release();
+                    if (!reported_first_frame) {
+                        std::cout << "First YUY2 frame published to renderer ("
+                                  << kFrameBytes << " bytes).\n";
+                        reported_first_frame = true;
+                    }
                 }
 
                 frame_count_.fetch_add(1, std::memory_order_relaxed);
