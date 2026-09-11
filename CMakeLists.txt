@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(ps2_capture_stream LANGUAGES CXX)
+project(ps2_capture_stream LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -13,6 +13,7 @@ add_executable(ps2-capture-stream
     src/capture_formats.cpp
     src/capture_session.cpp
     src/hud_renderer.cpp
+    resources/app.rc
 )
 
 target_compile_definitions(ps2-capture-stream PRIVATE
