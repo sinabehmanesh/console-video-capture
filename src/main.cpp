@@ -19,7 +19,7 @@ namespace {
 
 constexpr wchar_t kWindowClassName[] = L"PS2CaptureStreamWindowClass";
 constexpr wchar_t kWindowTitle[] = L"PS2 Capture Stream - Stage 5";
-constexpr wchar_t kPreferredCaptureDevice[] = L"USB3 Video";
+constexpr wchar_t kCaptureHardwareId[] = L"vid_345f&pid_2131";
 
 constexpr char kVertexShaderSource[] = R"(
 struct VSOut {
@@ -180,13 +180,14 @@ CaptureDeviceInfo select_capture_device() {
     }
 
     for (const auto& device : devices) {
-        if (device.name == kPreferredCaptureDevice) {
-            std::wcout << L"Selected capture device: " << device.name << L"\n\n";
+        if (device.symbolic_link.find(kCaptureHardwareId) != std::wstring::npos) {
+            std::wcout << L"Selected capture device: " << device.name
+                       << L" (VID_345F:PID_2131)\n\n";
             return device;
         }
     }
 
-    throw std::runtime_error("Preferred capture device 'USB3 Video' was not found");
+    throw std::runtime_error("Capture card VID_345F:PID_2131 was not found");
 }
 
 ID3DBlob* compile_shader(const char* source, const char* entry_point, const char* target) {
