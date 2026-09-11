@@ -10,6 +10,7 @@ add_executable(ps2-capture-stream
     src/main.cpp
     src/capture_devices.cpp
     src/capture_formats.cpp
+    src/capture_session.cpp
 )
 
 target_compile_definitions(ps2-capture-stream PRIVATE
