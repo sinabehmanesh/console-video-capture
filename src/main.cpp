@@ -249,7 +249,7 @@ float4 main(PSIn input) : SV_TARGET {
         decode_bt601(nearest_x, down_y)
     ) * 0.25;
 
-    constexpr float sharpness = 0.18;
+    const float sharpness = 0.18;
     float3 sharpened = center + sharpness * (center - neighbours);
     return float4(saturate(sharpened), 1.0);
 }
