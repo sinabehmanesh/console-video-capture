@@ -4,18 +4,18 @@
 #include <mfapi.h>
 #include <objbase.h>
 
-#include <iomanip>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "capture_devices.h"
-#include "capture_formats.h"
+#include "capture_session.h"
 
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"PS2CaptureStreamWindowClass";
-constexpr wchar_t kWindowTitle[] = L"PS2 Capture Stream - Stage 3";
+constexpr wchar_t kWindowTitle[] = L"PS2 Capture Stream - Stage 4";
 constexpr wchar_t kPreferredCaptureDevice[] = L"USB3 Video";
 
 struct D3DState {
@@ -94,65 +94,22 @@ void throw_if_failed(HRESULT result, const char* message) {
     }
 }
 
-std::vector<CaptureDeviceInfo> print_capture_devices() {
+CaptureDeviceInfo select_capture_device() {
     const auto devices = enumerate_video_capture_devices();
 
     std::wcout << L"Video capture devices found: " << devices.size() << L'\n';
-    if (devices.empty()) {
-        std::wcout << L"  No video capture devices detected.\n";
-        return devices;
-    }
-
     for (std::size_t i = 0; i < devices.size(); ++i) {
-        const auto& device = devices[i];
-        std::wcout << L"[" << i << L"] "
-                   << (device.name.empty() ? L"(unnamed device)" : device.name)
-                   << L'\n';
-
-        if (!device.symbolic_link.empty()) {
-            std::wcout << L"    " << device.symbolic_link << L'\n';
-        }
+        std::wcout << L"[" << i << L"] " << devices[i].name << L'\n';
     }
-
-    return devices;
-}
-
-void print_capture_formats(const std::vector<CaptureDeviceInfo>& devices) {
-    const CaptureDeviceInfo* selected = nullptr;
 
     for (const auto& device : devices) {
         if (device.name == kPreferredCaptureDevice) {
-            selected = &device;
-            break;
+            std::wcout << L"Selected capture device: " << device.name << L"\n\n";
+            return device;
         }
     }
 
-    if (selected == nullptr) {
-        std::wcout << L"\nPreferred capture device '" << kPreferredCaptureDevice
-                   << L"' was not found; skipping format enumeration.\n";
-        return;
-    }
-
-    std::wcout << L"\nNative formats for " << selected->name << L":\n";
-
-    const auto formats = enumerate_video_formats(*selected);
-    if (formats.empty()) {
-        std::wcout << L"  No native video formats reported.\n";
-        return;
-    }
-
-    for (std::size_t i = 0; i < formats.size(); ++i) {
-        const auto& format = formats[i];
-        const double fps = format.fps_denominator == 0
-            ? 0.0
-            : static_cast<double>(format.fps_numerator) /
-                static_cast<double>(format.fps_denominator);
-
-        std::wcout << L"[" << std::setw(2) << i << L"] "
-                   << format.width << L"x" << format.height
-                   << L" @ " << std::fixed << std::setprecision(3) << fps
-                   << L" fps - " << format.subtype << L'\n';
-    }
+    throw std::runtime_error("Preferred capture device 'USB3 Video' was not found");
 }
 
 void create_render_target() {
@@ -333,14 +290,16 @@ HWND create_window(HINSTANCE instance) {
 int main() {
     try {
         MediaFoundationRuntime media_foundation;
-        const auto devices = print_capture_devices();
-        print_capture_formats(devices);
+        CaptureDeviceInfo device = select_capture_device();
+        CaptureSession capture(std::move(device));
+        capture.start();
 
         const HINSTANCE instance = GetModuleHandleW(nullptr);
         HWND window = create_window(instance);
         initialize_d3d(window);
 
-        std::cout << "Stage 3 running: native capture format discovery + D3D11 renderer.\n";
+        std::cout << "Stage 4 running: live 1080p60 YUY2 frame capture + D3D11 renderer.\n";
+        std::cout << "The window is still black by design; captured frames are not rendered yet.\n";
         std::cout << "Close the window to exit.\n";
 
         MSG message{};
@@ -361,6 +320,8 @@ int main() {
             }
         }
 
+        capture.stop();
+        std::cout << "Captured frames: " << capture.frame_count() << '\n';
         return static_cast<int>(message.wParam);
     } catch (const std::exception& error) {
         std::cerr << "Fatal error: " << error.what() << '\n';
