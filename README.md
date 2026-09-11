@@ -10,19 +10,30 @@ PS2 -> HDMI adapter -> USB capture card -> Media Foundation -> Direct3D 11 -> di
 
 ## Current status
 
-Stage 5 is implemented on `feature/low-latency-capture-preview`:
+Stage 6 is implemented on `feature/low-latency-capture-preview`:
 
 - Win32 window
 - Direct3D 11 swap chain and rendering
 - Media Foundation device discovery
 - Native capture format enumeration
-- Live `1920x1080 @ 60 fps YUY2` capture from `USB3 Video`
+- Live `720x480 @ 60 fps YUY2` capture from the target capture card
+- Capture-card selection by stable USB hardware ID (`VID_345F:PID_2131`)
 - Latest-frame handoff from the capture thread
 - GPU upload of packed YUY2 frames
 - D3D11 pixel-shader YUV -> RGB conversion
 - Live video preview in the application window
+- Centered 4:3 fit mode with black borders
+- Fixed `960x720` centered mode
+- Stretch mode for comparison/debugging
 
-The current renderer intentionally shows the raw capture frame stretched to the window. Aspect-ratio modes, fixed-size centered output, fullscreen UX, audio passthrough, and deeper latency tuning are later stages.
+### Display hotkeys
+
+- `M` - cycle display modes
+- `1` - Fit 4:3
+- `2` - Fixed 960x720
+- `3` - Stretch
+
+Borderless fullscreen, audio passthrough, and deeper latency tuning are later stages.
 
 ## Build with MSVC
 
@@ -46,8 +57,8 @@ Run:
 3. Capture format enumeration
 4. Live low-latency frame capture
 5. GPU YUY2 rendering
-6. Scaling/aspect-ratio modes and borderless fullscreen
-7. Audio passthrough and latency/statistics tuning
+6. Scaling/aspect-ratio modes
+7. Borderless fullscreen, audio passthrough, and latency/statistics tuning
 8. Packaging/release
 
 ## Design constraints
