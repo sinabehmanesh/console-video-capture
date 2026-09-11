@@ -21,6 +21,7 @@
 namespace {
 
 constexpr wchar_t kCaptureHardwareId[] = L"vid_345f&pid_2131";
+constexpr wchar_t kCaptureAudioFriendlyName[] = L"usb2 digital audio";
 
 void throw_if_failed(HRESULT result, const char* message) {
     if (FAILED(result)) {
@@ -72,9 +73,19 @@ bool endpoint_matches_capture_card(IMMDevice* device) {
     const std::wstring instance = lowercase(device_property_string(device, PKEY_Device_InstanceId));
     const std::wstring id = lowercase(endpoint_id(device));
 
-    return friendly.find(kCaptureHardwareId) != std::wstring::npos ||
-           instance.find(kCaptureHardwareId) != std::wstring::npos ||
-           id.find(kCaptureHardwareId) != std::wstring::npos;
+    const bool hardware_id_match =
+        friendly.find(kCaptureHardwareId) != std::wstring::npos ||
+        instance.find(kCaptureHardwareId) != std::wstring::npos ||
+        id.find(kCaptureHardwareId) != std::wstring::npos;
+
+    // Windows exposes this capture card's audio interface as a separate USB
+    // audio endpoint, so its MMDevice properties do not necessarily contain
+    // the video interface VID/PID string. Use the observed friendly name as a
+    // narrow fallback after trying the stable hardware-id match first.
+    const bool friendly_name_match =
+        friendly.find(kCaptureAudioFriendlyName) != std::wstring::npos;
+
+    return hardware_id_match || friendly_name_match;
 }
 
 IMMDevice* find_capture_audio_endpoint(IMMDeviceEnumerator* enumerator) {
@@ -187,7 +198,7 @@ void AudioPassthrough::audio_loop(std::stop_token stop_token) {
 
         capture_device = find_capture_audio_endpoint(enumerator);
         if (capture_device == nullptr) {
-            std::cerr << "Audio passthrough disabled: no capture endpoint matched VID_345F:PID_2131.\n";
+            std::cerr << "Audio passthrough disabled: capture-card audio endpoint was not found.\n";
             enumerator->Release();
             CoUninitialize();
             return;
