@@ -27,7 +27,7 @@ if (MSVC)
     target_compile_options(ps2-capture-stream PRIVATE
         /W4
         /permissive-
-        $<$<COMPILE_LANGUAGE:CXX>:/FI"${CMAKE_CURRENT_SOURCE_DIR}/src/app_icon.h">
+        $<$<COMPILE_LANGUAGE:CXX>:/FI${CMAKE_CURRENT_SOURCE_DIR}/src/app_icon.h>
     )
 elseif (MINGW)
     target_compile_options(ps2-capture-stream PRIVATE
