@@ -1,29 +1,14 @@
 # Releasing
 
-Releases are created automatically from Git tags that start with `v`.
-
-## Create a release
-
-From an up-to-date `main` branch:
+Releases are tag-driven. Push a tag beginning with `v` and GitHub Actions builds the Windows executable and creates the release.
 
 ```powershell
 git checkout main
 git pull
-git tag v1.0.0
-git push origin v1.0.0
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
-The release workflow will:
+The workflow builds `ps2-capture-stream.exe`, creates a GitHub Release, generates release notes and attaches the executable.
 
-1. Build `ps2-capture-stream.exe` on `windows-latest` using Visual Studio 2022 x64.
-2. Create a GitHub Release for the pushed tag.
-3. Generate the release notes automatically from GitHub history.
-4. Attach `ps2-capture-stream.exe` to the release.
-
-## Pull request CI
-
-Non-draft pull requests run the repository's pre-commit checks. Draft pull requests are skipped until they are marked ready for review.
-
-## Main branch CI
-
-Every push to `main` runs the pre-commit checks and a clean Windows Release build.
+CI also runs pre-commit checks on non-draft pull requests and validates `main` with a Windows Release build.
