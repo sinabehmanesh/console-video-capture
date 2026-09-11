@@ -48,6 +48,7 @@ enum class DisplayMode {
 enum class ScalingFilter {
     Nearest,
     Bilinear,
+    SharpBilinear,
 };
 
 struct WindowState {
@@ -179,6 +180,81 @@ float4 main(PSIn input) : SV_TARGET {
 }
 )";
 
+constexpr char kPixelShaderSharpBilinearSource[] = R"(
+Texture2D<float4> yuy2_texture : register(t0);
+
+struct PSIn {
+    float4 position : SV_POSITION;
+    float2 uv : TEXCOORD0;
+};
+
+float3 decode_bt601(uint source_x, uint source_y) {
+    float4 packed = yuy2_texture.Load(int3(source_x / 2, source_y, 0));
+
+    float y = ((source_x & 1) == 0) ? packed.r : packed.b;
+    float u = packed.g - (128.0 / 255.0);
+    float v = packed.a - (128.0 / 255.0);
+
+    float luma = 1.164383 * (y - (16.0 / 255.0));
+    float3 rgb;
+    rgb.r = luma + 1.596027 * v;
+    rgb.g = luma - 0.391762 * u - 0.812968 * v;
+    rgb.b = luma + 2.017232 * u;
+    return saturate(rgb);
+}
+
+float3 sample_bilinear(float2 source_pos, uint source_width, uint source_height) {
+    float2 max_coord = float2(source_width - 1, source_height - 1);
+    source_pos = clamp(source_pos, float2(0.0, 0.0), max_coord);
+
+    uint x0 = (uint)floor(source_pos.x);
+    uint y0 = (uint)floor(source_pos.y);
+    uint x1 = min(x0 + 1, source_width - 1);
+    uint y1 = min(y0 + 1, source_height - 1);
+    float2 fraction = frac(source_pos);
+
+    float3 top = lerp(
+        decode_bt601(x0, y0),
+        decode_bt601(x1, y0),
+        fraction.x
+    );
+    float3 bottom = lerp(
+        decode_bt601(x0, y1),
+        decode_bt601(x1, y1),
+        fraction.x
+    );
+    return lerp(top, bottom, fraction.y);
+}
+
+float4 main(PSIn input) : SV_TARGET {
+    uint packed_width = 0;
+    uint source_height = 0;
+    yuy2_texture.GetDimensions(packed_width, source_height);
+    uint source_width = packed_width * 2;
+
+    float2 source_pos = saturate(input.uv) * float2(source_width, source_height) - 0.5;
+    float3 center = sample_bilinear(source_pos, source_width, source_height);
+
+    uint nearest_x = min((uint)max(round(source_pos.x), 0.0), source_width - 1);
+    uint nearest_y = min((uint)max(round(source_pos.y), 0.0), source_height - 1);
+    uint left_x = nearest_x > 0 ? nearest_x - 1 : 0;
+    uint right_x = min(nearest_x + 1, source_width - 1);
+    uint up_y = nearest_y > 0 ? nearest_y - 1 : 0;
+    uint down_y = min(nearest_y + 1, source_height - 1);
+
+    float3 neighbours = (
+        decode_bt601(left_x, nearest_y) +
+        decode_bt601(right_x, nearest_y) +
+        decode_bt601(nearest_x, up_y) +
+        decode_bt601(nearest_x, down_y)
+    ) * 0.25;
+
+    constexpr float sharpness = 0.18;
+    float3 sharpened = center + sharpness * (center - neighbours);
+    return float4(saturate(sharpened), 1.0);
+}
+)";
+
 struct D3DState {
     ID3D11Device* device = nullptr;
     ID3D11DeviceContext* context = nullptr;
@@ -187,6 +263,7 @@ struct D3DState {
     ID3D11VertexShader* video_vertex_shader = nullptr;
     ID3D11PixelShader* video_pixel_shader_nearest = nullptr;
     ID3D11PixelShader* video_pixel_shader_bilinear = nullptr;
+    ID3D11PixelShader* video_pixel_shader_sharp_bilinear = nullptr;
     ID3D11Texture2D* yuy2_texture = nullptr;
     ID3D11ShaderResourceView* yuy2_srv = nullptr;
     UINT viewport_width = 0;
@@ -196,6 +273,7 @@ struct D3DState {
         if (context != nullptr) context->ClearState();
         if (yuy2_srv != nullptr) yuy2_srv->Release();
         if (yuy2_texture != nullptr) yuy2_texture->Release();
+        if (video_pixel_shader_sharp_bilinear != nullptr) video_pixel_shader_sharp_bilinear->Release();
         if (video_pixel_shader_bilinear != nullptr) video_pixel_shader_bilinear->Release();
         if (video_pixel_shader_nearest != nullptr) video_pixel_shader_nearest->Release();
         if (video_vertex_shader != nullptr) video_vertex_shader->Release();
@@ -243,7 +321,12 @@ const OutputResolution& selected_output_resolution() {
 }
 
 const char* scaling_filter_name() {
-    return g_scaling_filter == ScalingFilter::Bilinear ? "Bilinear" : "Nearest";
+    switch (g_scaling_filter) {
+    case ScalingFilter::Nearest: return "Nearest";
+    case ScalingFilter::Bilinear: return "Bilinear";
+    case ScalingFilter::SharpBilinear: return "Sharp bilinear";
+    }
+    return "Unknown";
 }
 
 void update_hud_text() {
@@ -287,11 +370,18 @@ void print_selected_resolution() {
     std::cout << "Output resolution: " << resolution.width << 'x' << resolution.height << '\n';
 }
 
-void toggle_scaling_filter() {
-    g_scaling_filter =
-        g_scaling_filter == ScalingFilter::Bilinear
-            ? ScalingFilter::Nearest
-            : ScalingFilter::Bilinear;
+void cycle_scaling_filter() {
+    switch (g_scaling_filter) {
+    case ScalingFilter::Nearest:
+        g_scaling_filter = ScalingFilter::Bilinear;
+        break;
+    case ScalingFilter::Bilinear:
+        g_scaling_filter = ScalingFilter::SharpBilinear;
+        break;
+    case ScalingFilter::SharpBilinear:
+        g_scaling_filter = ScalingFilter::Nearest;
+        break;
+    }
     std::cout << "Scaling filter: " << scaling_filter_name() << '\n';
 }
 
@@ -579,6 +669,16 @@ void initialize_video_renderer() {
     bilinear_blob->Release();
     throw_if_failed(bilinear_result, "Failed to create bilinear YUY2 pixel shader");
 
+    ID3DBlob* sharp_bilinear_blob = compile_shader(kPixelShaderSharpBilinearSource, "main", "ps_5_0");
+    const HRESULT sharp_bilinear_result = g_d3d.device->CreatePixelShader(
+        sharp_bilinear_blob->GetBufferPointer(),
+        sharp_bilinear_blob->GetBufferSize(),
+        nullptr,
+        &g_d3d.video_pixel_shader_sharp_bilinear
+    );
+    sharp_bilinear_blob->Release();
+    throw_if_failed(sharp_bilinear_result, "Failed to create sharp bilinear YUY2 pixel shader");
+
     D3D11_TEXTURE2D_DESC texture_desc{};
     texture_desc.Width = CaptureSession::kCaptureWidth / 2;
     texture_desc.Height = CaptureSession::kCaptureHeight;
@@ -689,6 +789,18 @@ bool upload_latest_frame(CaptureSession& capture) {
     return true;
 }
 
+ID3D11PixelShader* selected_video_pixel_shader() {
+    switch (g_scaling_filter) {
+    case ScalingFilter::Nearest:
+        return g_d3d.video_pixel_shader_nearest;
+    case ScalingFilter::Bilinear:
+        return g_d3d.video_pixel_shader_bilinear;
+    case ScalingFilter::SharpBilinear:
+        return g_d3d.video_pixel_shader_sharp_bilinear;
+    }
+    return g_d3d.video_pixel_shader_bilinear;
+}
+
 void render_frame(CaptureSession& capture) {
     if (g_d3d.context == nullptr || g_d3d.render_target == nullptr || g_d3d.swap_chain == nullptr) {
         return;
@@ -708,13 +820,7 @@ void render_frame(CaptureSession& capture) {
         g_d3d.context->IASetInputLayout(nullptr);
         g_d3d.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         g_d3d.context->VSSetShader(g_d3d.video_vertex_shader, nullptr, 0);
-        g_d3d.context->PSSetShader(
-            g_scaling_filter == ScalingFilter::Bilinear
-                ? g_d3d.video_pixel_shader_bilinear
-                : g_d3d.video_pixel_shader_nearest,
-            nullptr,
-            0
-        );
+        g_d3d.context->PSSetShader(selected_video_pixel_shader(), nullptr, 0);
         g_d3d.context->PSSetShaderResources(0, 1, &g_d3d.yuy2_srv);
         g_d3d.context->Draw(3, 0);
 
@@ -779,7 +885,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
                 return 0;
             }
             if (w_param == 'Q') {
-                toggle_scaling_filter();
+                cycle_scaling_filter();
                 return 0;
             }
             if (w_param == 'M') {
@@ -882,12 +988,13 @@ int main() {
 
         std::cout << "Stage 9 running: live PS2 preview with image-quality controls.\n";
         std::cout << "Color matrix: BT.601 limited-range for 720x480 YUY2.\n";
-        std::cout << "Scaling filter: " << scaling_filter_name() << " (Q toggles Nearest/Bilinear).\n";
+        std::cout << "Scaling filter: " << scaling_filter_name()
+                  << " (Q cycles Nearest/Bilinear/Sharp bilinear).\n";
         std::cout << "Default mode: Fixed resolution.\n";
         print_selected_resolution();
         std::cout << "HUD: selected output resolution + capture FPS in the top-left corner.\n";
         std::cout << "Hotkeys: F11 = toggle fullscreen, Esc = leave fullscreen, R = cycle output resolution.\n";
-        std::cout << "          Q = toggle scaling filter, M = cycle modes.\n";
+        std::cout << "          Q = cycle scaling filter, M = cycle modes.\n";
         std::cout << "          1 = Fit 4:3, 2 = Fixed resolution, 3 = Stretch.\n";
         std::cout << "Fixed resolutions: 640x480, 960x720, 1280x960, 1920x1440.\n";
         std::cout << "Audio uses the capture-card input and the current Windows default output device.\n";
