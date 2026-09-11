@@ -1,4 +1,4 @@
-# PS2 Capture Stream
+# PlayStation2 Capture Stream
 
 A native Windows C++ utility for low-latency preview of a PlayStation 2 through a USB capture card.
 
