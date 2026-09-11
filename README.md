@@ -1,70 +1,60 @@
-# ps2-capture-stream
+# PS2 Capture Stream
 
-Low-latency Windows capture-card preview for retro consoles.
+A native Windows C++ utility for low-latency preview of a PlayStation 2 through a USB capture card.
 
-## Goal
-
-Use a USB HDMI capture card as a low-latency monitor for a PlayStation 2 while keeping control over aspect ratio and scaling on a modern display.
-
-Target pipeline:
+Pipeline:
 
 ```text
-PS2 -> HDMI adapter -> USB capture card -> Windows app -> monitor
+PS2 -> HDMI adapter -> USB capture card -> Media Foundation -> Direct3D 11 -> display
 ```
 
-The final application is intended to provide:
+## Current status
 
-- low-latency capture preview
-- 4:3 preservation
-- fixed-size centered rendering with black borders
-- fit / fill / 1:1-style scaling modes
-- borderless fullscreen
-- audio passthrough
-- basic FPS / timing statistics
+Stage 5 is implemented on `feature/low-latency-capture-preview`:
 
-No network service, telemetry, or automatic updater is planned.
+- Win32 window
+- Direct3D 11 swap chain and rendering
+- Media Foundation device discovery
+- Native capture format enumeration
+- Live `1920x1080 @ 60 fps YUY2` capture from `USB3 Video`
+- Latest-frame handoff from the capture thread
+- GPU upload of packed YUY2 frames
+- D3D11 pixel-shader YUV -> RGB conversion
+- Live video preview in the application window
 
-## Stage 1
+The current renderer intentionally shows the raw capture frame stretched to the window. Aspect-ratio modes, fixed-size centered output, fullscreen UX, audio passthrough, and deeper latency tuning are later stages.
 
-Stage 1 establishes the rendering foundation only:
+## Build with MSVC
 
-- native Win32 window
-- Direct3D 11 device and swap chain
-- resize-safe render target recreation
-- immediate presentation loop
-- GCC/MinGW-compatible CMake build
+From a Visual Studio Developer Command Prompt or Developer PowerShell:
 
-The window currently renders a dark background. Capture-card access is added in Stage 2.
-
-## Build on Windows with GCC / MinGW-w64
-
-Requirements:
-
-- GCC/MinGW-w64 with C++20 support
-- CMake 3.20+
-- Windows SDK headers/libraries supplied by MinGW-w64
-
-From a MinGW shell:
-
-```bash
-cmake -S . -B build -G "MinGW Makefiles"
-cmake --build build -j
-./build/ps2-capture-stream.exe
+```powershell
+cmake -S . -B build -G "NMake Makefiles"
+cmake --build build
 ```
 
-Or compile Stage 1 directly with `g++`:
+Run:
 
-```bash
-g++ -std=c++20 -Wall -Wextra -Wpedantic src/main.cpp -ld3d11 -ldxgi -o ps2-capture-stream.exe
+```powershell
+.\build\ps2-capture-stream.exe
 ```
 
-## Development plan
+## Roadmap
 
-1. Win32 + Direct3D 11 foundation
+1. Win32 + D3D11 foundation
 2. Media Foundation capture-device discovery
-3. Live video frame capture and rendering
-4. Low-latency tuning and latest-frame-wins buffering
-5. 4:3, fit/fill, fixed-size centered rendering
-6. Audio passthrough
-7. Fullscreen, hotkeys, settings, and timing stats
-8. Release packaging
+3. Capture format enumeration
+4. Live low-latency frame capture
+5. GPU YUY2 rendering
+6. Scaling/aspect-ratio modes and borderless fullscreen
+7. Audio passthrough and latency/statistics tuning
+8. Packaging/release
+
+## Design constraints
+
+- Native Windows application
+- MSVC x64 toolchain
+- No network dependency
+- No telemetry
+- No auto-updater
+- No mandatory installer
