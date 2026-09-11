@@ -1,15 +1,19 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
+#include <mfapi.h>
+#include <objbase.h>
 
 #include <iostream>
 #include <stdexcept>
 #include <string>
 
+#include "capture_devices.h"
+
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"PS2CaptureStreamWindowClass";
-constexpr wchar_t kWindowTitle[] = L"PS2 Capture Stream - Stage 1";
+constexpr wchar_t kWindowTitle[] = L"PS2 Capture Stream - Stage 2";
 
 struct D3DState {
     ID3D11Device* device = nullptr;
@@ -36,6 +40,47 @@ struct D3DState {
     }
 };
 
+class MediaFoundationRuntime {
+public:
+    MediaFoundationRuntime() {
+        const HRESULT com_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        if (FAILED(com_result)) {
+            throw std::runtime_error(
+                "Failed to initialize COM (HRESULT=" +
+                std::to_string(static_cast<long>(com_result)) + ")"
+            );
+        }
+        com_initialized_ = true;
+
+        const HRESULT mf_result = MFStartup(MF_VERSION, MFSTARTUP_FULL);
+        if (FAILED(mf_result)) {
+            CoUninitialize();
+            com_initialized_ = false;
+            throw std::runtime_error(
+                "Failed to initialize Media Foundation (HRESULT=" +
+                std::to_string(static_cast<long>(mf_result)) + ")"
+            );
+        }
+        mf_initialized_ = true;
+    }
+
+    ~MediaFoundationRuntime() {
+        if (mf_initialized_) {
+            MFShutdown();
+        }
+        if (com_initialized_) {
+            CoUninitialize();
+        }
+    }
+
+    MediaFoundationRuntime(const MediaFoundationRuntime&) = delete;
+    MediaFoundationRuntime& operator=(const MediaFoundationRuntime&) = delete;
+
+private:
+    bool com_initialized_ = false;
+    bool mf_initialized_ = false;
+};
+
 D3DState g_d3d;
 
 void throw_if_failed(HRESULT result, const char* message) {
@@ -43,6 +88,27 @@ void throw_if_failed(HRESULT result, const char* message) {
         throw std::runtime_error(
             std::string(message) + " (HRESULT=" + std::to_string(static_cast<long>(result)) + ")"
         );
+    }
+}
+
+void print_capture_devices() {
+    const auto devices = enumerate_video_capture_devices();
+
+    std::wcout << L"Video capture devices found: " << devices.size() << L'\n';
+    if (devices.empty()) {
+        std::wcout << L"  No video capture devices detected.\n";
+        return;
+    }
+
+    for (std::size_t i = 0; i < devices.size(); ++i) {
+        const auto& device = devices[i];
+        std::wcout << L"[" << i << L"] "
+                   << (device.name.empty() ? L"(unnamed device)" : device.name)
+                   << L'\n';
+
+        if (!device.symbolic_link.empty()) {
+            std::wcout << L"    " << device.symbolic_link << L'\n';
+        }
     }
 }
 
@@ -226,11 +292,14 @@ HWND create_window(HINSTANCE instance) {
 
 int main() {
     try {
+        MediaFoundationRuntime media_foundation;
+        print_capture_devices();
+
         const HINSTANCE instance = GetModuleHandleW(nullptr);
         HWND window = create_window(instance);
         initialize_d3d(window);
 
-        std::cout << "Stage 1 running: Win32 window + Direct3D 11 renderer.\n";
+        std::cout << "Stage 2 running: Media Foundation device discovery + D3D11 renderer.\n";
         std::cout << "Close the window to exit.\n";
 
         MSG message{};
