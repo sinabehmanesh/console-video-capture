@@ -6,11 +6,12 @@ Pipeline:
 
 ```text
 PS2 -> HDMI adapter -> USB capture card -> Media Foundation -> Direct3D 11 -> display
+                                  \-> WASAPI -> default Windows audio output
 ```
 
 ## Current status
 
-Stage 7 is implemented on `feature/low-latency-capture-preview`:
+Stage 8 is implemented on `feature/low-latency-capture-preview`:
 
 - Win32 window
 - Direct3D 11 swap chain and rendering
@@ -23,12 +24,13 @@ Stage 7 is implemented on `feature/low-latency-capture-preview`:
 - D3D11 pixel-shader YUV -> RGB conversion
 - Live video preview in the application window
 - Centered 4:3 fit mode with black borders
-- Selectable fixed 4:3 output resolutions: `640x480`, `960x720`, `1280x960`, `1920x1440`
-- Fixed-resolution output remains the same size while the window grows around it
-- The window cannot be resized below the selected fixed output resolution
+- Selectable fixed output sizes: `640x480`, `960x720`, `1280x960`, `1920x1440`
+- Minimum window size follows the selected fixed output size
 - Stretch mode for comparison/debugging
 - Borderless fullscreen on the current monitor
 - Window size and position restored when leaving fullscreen
+- WASAPI capture-card audio passthrough to the current default Windows output device
+- Audio thread promoted to the Windows `Pro Audio` MMCSS task when available
 
 ### Display hotkeys
 
@@ -37,12 +39,10 @@ Stage 7 is implemented on `feature/low-latency-capture-preview`:
 - `R` - cycle fixed output resolution
 - `M` - cycle display modes
 - `1` - Fit 4:3
-- `2` - Fixed selected resolution
+- `2` - Fixed resolution
 - `3` - Stretch
 
-The default mode is fixed `960x720`.
-
-Audio passthrough and deeper latency/statistics tuning are later stages.
+The next stage is latency measurement/tuning and release cleanup.
 
 ## Build with MSVC
 
@@ -68,7 +68,9 @@ Run:
 5. GPU YUY2 rendering
 6. Scaling/aspect-ratio modes
 7. Borderless fullscreen and selectable fixed output sizes
-8. Audio passthrough, latency/statistics tuning, packaging/release
+8. WASAPI audio passthrough
+9. Latency/statistics tuning
+10. Packaging/release
 
 ## Design constraints
 
