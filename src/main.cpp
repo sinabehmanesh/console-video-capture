@@ -23,7 +23,7 @@
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"PS2CaptureStreamWindowClass";
-constexpr wchar_t kWindowTitle[] = L"PS2 Capture Stream - Stage 8";
+constexpr wchar_t kWindowTitle[] = L"PS2 Capture Stream - Stage 9";
 constexpr wchar_t kCaptureHardwareId[] = L"vid_345f&pid_2131";
 constexpr float kDisplayAspect = 4.0f / 3.0f;
 
@@ -105,11 +105,12 @@ float4 main(PSIn input) : SV_TARGET {
     float u = packed.g - (128.0 / 255.0);
     float v = packed.a - (128.0 / 255.0);
 
+    // BT.601 limited-range conversion for SD 480-line video.
     float luma = 1.164383 * (y - (16.0 / 255.0));
     float3 rgb;
-    rgb.r = luma + 1.792741 * v;
-    rgb.g = luma - 0.213249 * u - 0.532909 * v;
-    rgb.b = luma + 2.112402 * u;
+    rgb.r = luma + 1.596027 * v;
+    rgb.g = luma - 0.391762 * u - 0.812968 * v;
+    rgb.b = luma + 2.017232 * u;
 
     return float4(saturate(rgb), 1.0);
 }
@@ -782,7 +783,8 @@ int main() {
         HWND window = create_window(instance);
         initialize_d3d(window);
 
-        std::cout << "Stage 8 running: live PS2 preview with WASAPI audio passthrough.\n";
+        std::cout << "Stage 9 running: live PS2 preview with SD color correction.\n";
+        std::cout << "Color matrix: BT.601 limited-range for 720x480 YUY2.\n";
         std::cout << "Default mode: Fixed resolution.\n";
         print_selected_resolution();
         std::cout << "HUD: selected output resolution + capture FPS in the top-left corner.\n";
