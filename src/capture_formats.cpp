@@ -2,12 +2,15 @@
 
 #include <windows.h>
 #include <mfapi.h>
+#include <mferror.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
 #include <objbase.h>
 
+#include <iterator>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace {
 
