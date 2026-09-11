@@ -58,7 +58,9 @@ IMFMediaSource* create_media_source(const CaptureDeviceInfo& device) {
     return media_source;
 }
 
-IMFMediaType* find_yuy2_1080p60(IMFSourceReader* reader) {
+IMFMediaType* find_yuy2_capture_type(IMFSourceReader* reader, UINT32& selected_fps) {
+    IMFMediaType* fifty_hz_fallback = nullptr;
+
     for (DWORD index = 0;; ++index) {
         IMFMediaType* media_type = nullptr;
         const HRESULT result = reader->GetNativeMediaType(
@@ -78,21 +80,36 @@ IMFMediaType* find_yuy2_1080p60(IMFSourceReader* reader) {
         UINT32 fps_num = 0;
         UINT32 fps_den = 1;
 
-        const bool matches =
+        const bool dimensions_match =
             SUCCEEDED(media_type->GetGUID(MF_MT_SUBTYPE, &subtype)) &&
             subtype == MFVideoFormat_YUY2 &&
             SUCCEEDED(MFGetAttributeSize(media_type, MF_MT_FRAME_SIZE, &width, &height)) &&
             width == CaptureSession::kCaptureWidth &&
             height == CaptureSession::kCaptureHeight &&
             SUCCEEDED(MFGetAttributeRatio(media_type, MF_MT_FRAME_RATE, &fps_num, &fps_den)) &&
-            fps_den != 0 &&
-            fps_num == 60 * fps_den;
+            fps_den != 0;
 
-        if (matches) {
-            return media_type;
+        if (dimensions_match) {
+            if (fps_num == 60 * fps_den) {
+                if (fifty_hz_fallback != nullptr) {
+                    fifty_hz_fallback->Release();
+                }
+                selected_fps = 60;
+                return media_type;
+            }
+
+            if (fps_num == 50 * fps_den && fifty_hz_fallback == nullptr) {
+                fifty_hz_fallback = media_type;
+                continue;
+            }
         }
 
         media_type->Release();
+    }
+
+    if (fifty_hz_fallback != nullptr) {
+        selected_fps = 50;
+        return fifty_hz_fallback;
     }
 
     return nullptr;
@@ -117,12 +134,9 @@ bool copy_sample_to_frame(IMFSample* sample, std::vector<std::uint8_t>& destinat
 
             if (absolute_pitch >= kRowBytes) {
                 for (std::uint32_t row = 0; row < CaptureSession::kCaptureHeight; ++row) {
-                    const BYTE* source_row = nullptr;
-                    if (pitch >= 0) {
-                        source_row = scanline + static_cast<std::size_t>(row) * absolute_pitch;
-                    } else {
-                        source_row = scanline - static_cast<std::size_t>(row) * absolute_pitch;
-                    }
+                    const BYTE* source_row = pitch >= 0
+                        ? scanline + static_cast<std::size_t>(row) * absolute_pitch
+                        : scanline - static_cast<std::size_t>(row) * absolute_pitch;
 
                     std::memcpy(
                         destination.data() + static_cast<std::size_t>(row) * kRowBytes,
@@ -253,9 +267,10 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
         reader_attributes->Release();
         throw_if_failed(reader_result, "Failed to create capture source reader");
 
-        IMFMediaType* selected_type = find_yuy2_1080p60(reader);
+        UINT32 selected_fps = 0;
+        IMFMediaType* selected_type = find_yuy2_capture_type(reader, selected_fps);
         if (selected_type == nullptr) {
-            throw std::runtime_error("Capture device does not expose 1920x1080 @ 60 YUY2");
+            throw std::runtime_error("Capture device does not expose 720x480 YUY2 at 60 or 50 fps");
         }
 
         const HRESULT set_type_result = reader->SetCurrentMediaType(
@@ -264,10 +279,10 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
             selected_type
         );
         selected_type->Release();
-        throw_if_failed(set_type_result, "Failed to select 1920x1080 @ 60 YUY2");
+        throw_if_failed(set_type_result, "Failed to select 720x480 YUY2 capture mode");
 
         std::wcout << L"Capture started on " << device_.name
-                   << L" using 1920x1080 @ 60 fps YUY2.\n";
+                   << L" using 720x480 @ " << selected_fps << L" fps YUY2.\n";
 
         running_.store(true, std::memory_order_release);
 
