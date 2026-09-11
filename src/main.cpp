@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -53,6 +54,8 @@ struct WindowState {
 DisplayMode g_display_mode = DisplayMode::FixedResolution;
 std::size_t g_output_resolution_index = 1;
 WindowState g_window_state;
+HWND g_hud_label = nullptr;
+UINT g_hud_fps = 0;
 
 constexpr char kVertexShaderSource[] = R"(
 struct VSOut {
@@ -172,6 +175,35 @@ const OutputResolution& selected_output_resolution() {
     return kOutputResolutions[g_output_resolution_index];
 }
 
+void update_hud_text() {
+    if (g_hud_label == nullptr) return;
+
+    const auto& resolution = selected_output_resolution();
+    const std::wstring text =
+        std::to_wstring(resolution.width) + L"x" + std::to_wstring(resolution.height) +
+        L"   " + std::to_wstring(g_hud_fps) + L" FPS";
+    SetWindowTextW(g_hud_label, text.c_str());
+}
+
+void update_hud_fps(CaptureSession& capture) {
+    using clock = std::chrono::steady_clock;
+    static auto last_update = clock::now();
+    static std::uint64_t last_frame_count = capture.frame_count();
+
+    const auto now = clock::now();
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_update).count();
+    if (elapsed_ms < 1000) return;
+
+    const std::uint64_t frame_count = capture.frame_count();
+    const std::uint64_t frame_delta = frame_count - last_frame_count;
+    const double fps = static_cast<double>(frame_delta) * 1000.0 / static_cast<double>(elapsed_ms);
+    g_hud_fps = static_cast<UINT>(fps + 0.5);
+    update_hud_text();
+
+    last_frame_count = frame_count;
+    last_update = now;
+}
+
 const char* display_mode_name(DisplayMode mode) {
     switch (mode) {
     case DisplayMode::Fit4x3: return "Fit 4:3";
@@ -236,6 +268,7 @@ void cycle_output_resolution(HWND window) {
     g_output_resolution_index = (g_output_resolution_index + 1) % kOutputResolutions.size();
     g_display_mode = DisplayMode::FixedResolution;
     print_selected_resolution();
+    update_hud_text();
     ensure_window_is_large_enough(window);
 }
 
@@ -595,10 +628,20 @@ void render_frame(CaptureSession& capture) {
     }
 
     g_d3d.swap_chain->Present(0, 0);
+    update_hud_fps(capture);
 }
 
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l_param) {
     switch (message) {
+    case WM_CTLCOLORSTATIC:
+        if (reinterpret_cast<HWND>(l_param) == g_hud_label) {
+            const HDC device_context = reinterpret_cast<HDC>(w_param);
+            SetTextColor(device_context, RGB(255, 255, 255));
+            SetBkColor(device_context, RGB(0, 0, 0));
+            return reinterpret_cast<LRESULT>(GetStockObject(BLACK_BRUSH));
+        }
+        break;
+
     case WM_GETMINMAXINFO:
         if (!g_window_state.fullscreen) {
             const auto& resolution = selected_output_resolution();
@@ -656,6 +699,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
                 g_display_mode = DisplayMode::FixedResolution;
                 std::cout << "Display mode: Fixed resolution\n";
                 print_selected_resolution();
+                update_hud_text();
                 ensure_window_is_large_enough(window);
                 return 0;
             }
@@ -674,6 +718,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
         return 0;
 
     case WM_DESTROY:
+        g_hud_label = nullptr;
         PostQuitMessage(0);
         return 0;
 
@@ -719,6 +764,34 @@ HWND create_window(HINSTANCE instance) {
         throw std::runtime_error("Failed to create Win32 window");
     }
 
+    g_hud_label = CreateWindowExW(
+        0,
+        L"STATIC",
+        L"",
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        10,
+        10,
+        180,
+        22,
+        window,
+        nullptr,
+        instance,
+        nullptr
+    );
+
+    if (g_hud_label == nullptr) {
+        DestroyWindow(window);
+        throw std::runtime_error("Failed to create HUD label");
+    }
+
+    SendMessageW(
+        g_hud_label,
+        WM_SETFONT,
+        reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)),
+        TRUE
+    );
+    update_hud_text();
+
     ShowWindow(window, SW_SHOWDEFAULT);
     UpdateWindow(window);
     return window;
@@ -743,6 +816,7 @@ int main() {
         std::cout << "Stage 8 running: live PS2 preview with WASAPI audio passthrough.\n";
         std::cout << "Default mode: Fixed resolution.\n";
         print_selected_resolution();
+        std::cout << "HUD: selected output resolution + capture FPS in the top-left corner.\n";
         std::cout << "Hotkeys: F11 = toggle fullscreen, Esc = leave fullscreen, R = cycle output resolution.\n";
         std::cout << "          M = cycle modes, 1 = Fit 4:3, 2 = Fixed resolution, 3 = Stretch.\n";
         std::cout << "Fixed resolutions: 640x480, 960x720, 1280x960, 1920x1440.\n";
