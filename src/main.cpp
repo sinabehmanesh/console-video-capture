@@ -18,6 +18,7 @@
 #include "audio_passthrough.h"
 #include "capture_devices.h"
 #include "capture_session.h"
+#include "hud_renderer.h"
 
 namespace {
 
@@ -54,8 +55,8 @@ struct WindowState {
 DisplayMode g_display_mode = DisplayMode::FixedResolution;
 std::size_t g_output_resolution_index = 1;
 WindowState g_window_state;
-HWND g_hud_label = nullptr;
 UINT g_hud_fps = 0;
+HudRenderer g_hud_renderer;
 
 constexpr char kVertexShaderSource[] = R"(
 struct VSOut {
@@ -176,13 +177,11 @@ const OutputResolution& selected_output_resolution() {
 }
 
 void update_hud_text() {
-    if (g_hud_label == nullptr) return;
-
     const auto& resolution = selected_output_resolution();
-    const std::wstring text =
-        std::to_wstring(resolution.width) + L"x" + std::to_wstring(resolution.height) +
-        L"   " + std::to_wstring(g_hud_fps) + L" FPS";
-    SetWindowTextW(g_hud_label, text.c_str());
+    const std::string text =
+        std::to_string(resolution.width) + "x" + std::to_string(resolution.height) +
+        "  " + std::to_string(g_hud_fps) + " FPS";
+    g_hud_renderer.set_text(text);
 }
 
 void update_hud_fps(CaptureSession& capture) {
@@ -565,6 +564,8 @@ void initialize_d3d(HWND window) {
 
     create_render_target();
     initialize_video_renderer();
+    g_hud_renderer.initialize(g_d3d.device);
+    update_hud_text();
 
     std::cout << "Direct3D initialized. Feature level: 0x"
               << std::hex << static_cast<unsigned>(created_level) << std::dec << '\n';
@@ -627,21 +628,18 @@ void render_frame(CaptureSession& capture) {
         g_d3d.context->PSSetShaderResources(0, 1, &null_srv);
     }
 
+    g_hud_renderer.render(
+        g_d3d.context,
+        g_d3d.viewport_width,
+        g_d3d.viewport_height
+    );
+
     g_d3d.swap_chain->Present(0, 0);
     update_hud_fps(capture);
 }
 
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l_param) {
     switch (message) {
-    case WM_CTLCOLORSTATIC:
-        if (reinterpret_cast<HWND>(l_param) == g_hud_label) {
-            const HDC device_context = reinterpret_cast<HDC>(w_param);
-            SetTextColor(device_context, RGB(255, 255, 255));
-            SetBkColor(device_context, RGB(0, 0, 0));
-            return reinterpret_cast<LRESULT>(GetStockObject(BLACK_BRUSH));
-        }
-        break;
-
     case WM_GETMINMAXINFO:
         if (!g_window_state.fullscreen) {
             const auto& resolution = selected_output_resolution();
@@ -718,7 +716,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
         return 0;
 
     case WM_DESTROY:
-        g_hud_label = nullptr;
         PostQuitMessage(0);
         return 0;
 
@@ -763,34 +760,6 @@ HWND create_window(HINSTANCE instance) {
     if (window == nullptr) {
         throw std::runtime_error("Failed to create Win32 window");
     }
-
-    g_hud_label = CreateWindowExW(
-        0,
-        L"STATIC",
-        L"",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
-        10,
-        10,
-        180,
-        22,
-        window,
-        nullptr,
-        instance,
-        nullptr
-    );
-
-    if (g_hud_label == nullptr) {
-        DestroyWindow(window);
-        throw std::runtime_error("Failed to create HUD label");
-    }
-
-    SendMessageW(
-        g_hud_label,
-        WM_SETFONT,
-        reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)),
-        TRUE
-    );
-    update_hud_text();
 
     ShowWindow(window, SW_SHOWDEFAULT);
     UpdateWindow(window);
