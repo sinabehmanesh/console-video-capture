@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <audioclient.h>
 #include <avrt.h>
+#include <propkeydef.h>
 #include <functiondiscoverykeys_devpkey.h>
 #include <mmdeviceapi.h>
 #include <propvarutil.h>
@@ -291,7 +292,7 @@ void AudioPassthrough::audio_loop(std::stop_token stop_token) {
         }
 
         const std::size_t max_pending_bytes =
-            static_cast<std::size_t>(capture_format->nAvgBytesPerSec) / 20; // ~50 ms hard cap
+            static_cast<std::size_t>(capture_format->nAvgBytesPerSec) / 20;
 
         std::deque<std::uint8_t> pending_audio;
 
