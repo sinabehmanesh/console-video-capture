@@ -81,8 +81,8 @@ struct WindowState {
 
 DisplayMode g_display_mode = DisplayMode::FixedResolution;
 ScalingFilter g_scaling_filter = ScalingFilter::Bilinear;
-ColorMatrix g_color_matrix = ColorMatrix::BT601;
-InputRange g_input_range = InputRange::Limited;
+ColorMatrix g_color_matrix = ColorMatrix::BT709;
+InputRange g_input_range = InputRange::Full;
 float g_brightness = 0.0f;
 float g_contrast = 1.0f;
 float g_gamma = 1.0f;
@@ -363,7 +363,7 @@ float4 main(PSIn input) : SV_TARGET {
         decode_video(nearest_x, down_y)
     ) * 0.25;
 
-    const float sharpness = 0.18;
+    const float sharpness = 0.65;
     float3 sharpened = center + sharpness * (center - neighbours);
     return float4(apply_image_controls(sharpened), 1.0);
 }
@@ -463,8 +463,8 @@ void print_image_settings() {
 }
 
 void reset_image_settings() {
-    g_color_matrix = ColorMatrix::BT601;
-    g_input_range = InputRange::Limited;
+    g_color_matrix = ColorMatrix::BT709;
+    g_input_range = InputRange::Full;
     g_brightness = 0.0f;
     g_contrast = 1.0f;
     g_gamma = 1.0f;
