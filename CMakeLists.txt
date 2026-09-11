@@ -35,6 +35,7 @@ endif()
 
 target_link_libraries(ps2-capture-stream PRIVATE
     d3d11
+    d3dcompiler
     dxgi
     dxguid
     mf
