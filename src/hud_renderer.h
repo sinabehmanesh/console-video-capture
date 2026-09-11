@@ -31,4 +31,6 @@ private:
     std::string text_;
     std::vector<unsigned char> pixels_;
     bool dirty_ = true;
+    bool help_visible_ = false;
+    bool h_was_down_ = false;
 };

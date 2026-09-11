@@ -1,5 +1,6 @@
 #include "hud_renderer.h"
 
+#include <windows.h>
 #include <d3dcompiler.h>
 
 #include <algorithm>
@@ -11,16 +12,17 @@
 
 namespace {
 
-constexpr UINT kHudWidth = 148;
-constexpr UINT kHudHeight = 18;
+constexpr UINT kHudWidth = 590;
+constexpr UINT kHudHeight = 330;
 constexpr UINT kHudX = 10;
 constexpr UINT kHudY = 10;
-constexpr UINT kGlyphWidth = 3;
-constexpr UINT kGlyphHeight = 5;
+constexpr UINT kGlyphWidth = 5;
+constexpr UINT kGlyphHeight = 7;
 constexpr UINT kGlyphScale = 2;
-constexpr UINT kGlyphAdvance = 8;
-constexpr UINT kTextOriginX = 5;
-constexpr UINT kTextOriginY = 4;
+constexpr UINT kGlyphAdvance = 12;
+constexpr UINT kLineAdvance = 18;
+constexpr UINT kTextOriginX = 8;
+constexpr UINT kTextOriginY = 7;
 
 constexpr char kVertexShaderSource[] = R"(
 struct VSOut {
@@ -107,23 +109,55 @@ ID3DBlob* compile_shader(const char* source, const char* entry_point, const char
     return shader_blob;
 }
 
-std::array<std::uint8_t, kGlyphHeight> glyph_rows(char character) {
+using Glyph = std::array<std::uint8_t, kGlyphHeight>;
+
+Glyph glyph_rows(char character) {
     switch (character) {
-    case '0': return {0b111, 0b101, 0b101, 0b101, 0b111};
-    case '1': return {0b010, 0b110, 0b010, 0b010, 0b111};
-    case '2': return {0b111, 0b001, 0b111, 0b100, 0b111};
-    case '3': return {0b111, 0b001, 0b111, 0b001, 0b111};
-    case '4': return {0b101, 0b101, 0b111, 0b001, 0b001};
-    case '5': return {0b111, 0b100, 0b111, 0b001, 0b111};
-    case '6': return {0b111, 0b100, 0b111, 0b101, 0b111};
-    case '7': return {0b111, 0b001, 0b001, 0b001, 0b001};
-    case '8': return {0b111, 0b101, 0b111, 0b101, 0b111};
-    case '9': return {0b111, 0b101, 0b111, 0b001, 0b111};
-    case 'x': return {0b000, 0b101, 0b010, 0b101, 0b000};
-    case 'F': return {0b111, 0b100, 0b110, 0b100, 0b100};
-    case 'P': return {0b110, 0b101, 0b110, 0b100, 0b100};
-    case 'S': return {0b111, 0b100, 0b111, 0b001, 0b111};
-    default: return {0, 0, 0, 0, 0};
+    case '0': return {0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110};
+    case '1': return {0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110};
+    case '2': return {0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111};
+    case '3': return {0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110};
+    case '4': return {0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010};
+    case '5': return {0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110};
+    case '6': return {0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110};
+    case '7': return {0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000};
+    case '8': return {0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110};
+    case '9': return {0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110};
+
+    case 'A': return {0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001};
+    case 'B': return {0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110};
+    case 'C': return {0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110};
+    case 'D': return {0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110};
+    case 'E': return {0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111};
+    case 'F': return {0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000};
+    case 'G': return {0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110};
+    case 'H': return {0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001};
+    case 'I': return {0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110};
+    case 'J': return {0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100};
+    case 'K': return {0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001};
+    case 'L': return {0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111};
+    case 'M': return {0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001};
+    case 'N': return {0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001};
+    case 'O': return {0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110};
+    case 'P': return {0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000};
+    case 'Q': return {0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101};
+    case 'R': return {0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001};
+    case 'S': return {0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110};
+    case 'T': return {0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100};
+    case 'U': return {0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110};
+    case 'V': return {0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100};
+    case 'W': return {0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010};
+    case 'X': return {0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001};
+    case 'Y': return {0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100};
+    case 'Z': return {0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111};
+
+    case 'x': return {0b00000, 0b00000, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001};
+    case ':': return {0b00000, 0b00100, 0b00100, 0b00000, 0b00100, 0b00100, 0b00000};
+    case '/': return {0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000};
+    case '+': return {0b00000, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00000};
+    case '-': return {0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000};
+    case '.': return {0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00110, 0b00110};
+    default: return {0, 0, 0, 0, 0, 0, 0};
     }
 }
 
@@ -137,6 +171,38 @@ void write_pixel(std::vector<unsigned char>& pixels, UINT x, UINT y,
     pixels[index + 1] = g;
     pixels[index + 2] = b;
     pixels[index + 3] = a;
+}
+
+std::string build_help_text(const std::string& status_text) {
+    return status_text + "  H CLOSE HELP\n"
+        "\n"
+        "CONTROLS\n"
+        "F11  FULLSCREEN\n"
+        "ESC  LEAVE FULLSCREEN\n"
+        "R    CYCLE OUTPUT SIZE\n"
+        "Q    CYCLE SCALE FILTER\n"
+        "C    BT.601 / BT.709\n"
+        "L    LIMITED / FULL RANGE\n"
+        "B    BRIGHTNESS   SHIFT+B DECREASE\n"
+        "K    CONTRAST     SHIFT+K DECREASE\n"
+        "G    GAMMA        SHIFT+G DECREASE\n"
+        "S    SATURATION   SHIFT+S DECREASE\n"
+        "0    RESET IMAGE SETTINGS\n"
+        "M    CYCLE DISPLAY MODE\n"
+        "1    FIT 4:3\n"
+        "2    FIXED RESOLUTION\n"
+        "3    STRETCH\n"
+        "H    CLOSE HELP";
+}
+
+void draw_background(std::vector<unsigned char>& pixels, UINT width, UINT height, unsigned char alpha) {
+    width = std::min(width, kHudWidth);
+    height = std::min(height, kHudHeight);
+    for (UINT y = 0; y < height; ++y) {
+        for (UINT x = 0; x < width; ++x) {
+            write_pixel(pixels, x, y, 0, 0, 0, alpha);
+        }
+    }
 }
 
 } // namespace
@@ -238,6 +304,8 @@ void HudRenderer::initialize(ID3D11Device* device) {
 
     pixels_.resize(static_cast<std::size_t>(kHudWidth) * kHudHeight * 4);
     dirty_ = true;
+    help_visible_ = false;
+    h_was_down_ = false;
 }
 
 void HudRenderer::set_text(std::string text) {
@@ -249,19 +317,37 @@ void HudRenderer::set_text(std::string text) {
 void HudRenderer::update_texture(ID3D11DeviceContext* context) {
     std::fill(pixels_.begin(), pixels_.end(), static_cast<unsigned char>(0));
 
-    for (UINT y = 0; y < kHudHeight; ++y) {
-        for (UINT x = 0; x < kHudWidth; ++x) {
-            write_pixel(pixels_, x, y, 0, 0, 0, 120);
-        }
+    const std::string display_text = help_visible_
+        ? build_help_text(text_)
+        : text_ + "  H HELP";
+
+    if (help_visible_) {
+        draw_background(pixels_, 570, 325, 205);
+    } else {
+        const UINT status_width = std::min(
+            kHudWidth,
+            kTextOriginX * 2 + static_cast<UINT>(display_text.size()) * kGlyphAdvance
+        );
+        draw_background(pixels_, status_width, 28, 140);
     }
 
     UINT cursor_x = kTextOriginX;
-    for (char character : text_) {
+    UINT cursor_y = kTextOriginY;
+
+    for (char character : display_text) {
+        if (character == '\n') {
+            cursor_x = kTextOriginX;
+            cursor_y += kLineAdvance;
+            if (cursor_y + kGlyphHeight * kGlyphScale >= kHudHeight) break;
+            continue;
+        }
+
         const auto rows = glyph_rows(character);
 
         for (UINT glyph_y = 0; glyph_y < kGlyphHeight; ++glyph_y) {
             for (UINT glyph_x = 0; glyph_x < kGlyphWidth; ++glyph_x) {
-                const std::uint8_t bit = static_cast<std::uint8_t>(1u << (kGlyphWidth - 1 - glyph_x));
+                const std::uint8_t bit =
+                    static_cast<std::uint8_t>(1u << (kGlyphWidth - 1 - glyph_x));
                 if ((rows[glyph_y] & bit) == 0) continue;
 
                 for (UINT scale_y = 0; scale_y < kGlyphScale; ++scale_y) {
@@ -269,11 +355,11 @@ void HudRenderer::update_texture(ID3D11DeviceContext* context) {
                         write_pixel(
                             pixels_,
                             cursor_x + glyph_x * kGlyphScale + scale_x,
-                            kTextOriginY + glyph_y * kGlyphScale + scale_y,
+                            cursor_y + glyph_y * kGlyphScale + scale_y,
                             255,
                             255,
                             255,
-                            245
+                            250
                         );
                     }
                 }
@@ -281,7 +367,11 @@ void HudRenderer::update_texture(ID3D11DeviceContext* context) {
         }
 
         cursor_x += kGlyphAdvance;
-        if (cursor_x >= kHudWidth - kGlyphAdvance) break;
+        if (cursor_x >= kHudWidth - kGlyphAdvance) {
+            cursor_x = kTextOriginX;
+            cursor_y += kLineAdvance;
+            if (cursor_y + kGlyphHeight * kGlyphScale >= kHudHeight) break;
+        }
     }
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
@@ -309,6 +399,13 @@ void HudRenderer::render(ID3D11DeviceContext* context, UINT target_width, UINT t
         target_width == 0 || target_height == 0) {
         return;
     }
+
+    const bool h_down = (GetAsyncKeyState('H') & 0x8000) != 0;
+    if (h_down && !h_was_down_) {
+        help_visible_ = !help_visible_;
+        dirty_ = true;
+    }
+    h_was_down_ = h_down;
 
     if (dirty_) {
         update_texture(context);
