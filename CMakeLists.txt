@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_executable(ps2-capture-stream
     src/main.cpp
+    src/audio_passthrough.cpp
     src/capture_devices.cpp
     src/capture_formats.cpp
     src/capture_session.cpp
@@ -34,6 +35,7 @@ elseif (MINGW)
 endif()
 
 target_link_libraries(ps2-capture-stream PRIVATE
+    avrt
     d3d11
     d3dcompiler
     dxgi
