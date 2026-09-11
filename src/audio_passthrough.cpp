@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <cwctype>
 #include <deque>
 #include <iostream>
 #include <stdexcept>
@@ -19,13 +20,6 @@
 namespace {
 
 constexpr wchar_t kCaptureHardwareId[] = L"vid_345f&pid_2131";
-
-void release_unknown(IUnknown*& object) {
-    if (object != nullptr) {
-        object->Release();
-        object = nullptr;
-    }
-}
 
 void throw_if_failed(HRESULT result, const char* message) {
     if (FAILED(result)) {
@@ -37,7 +31,7 @@ void throw_if_failed(HRESULT result, const char* message) {
 
 std::wstring lowercase(std::wstring value) {
     std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
-        return static_cast<wchar_t>(towlower(ch));
+        return static_cast<wchar_t>(std::towlower(ch));
     });
     return value;
 }
@@ -292,6 +286,10 @@ void AudioPassthrough::audio_loop(std::stop_token stop_token) {
         );
 
         const std::size_t block_align = capture_format->nBlockAlign;
+        if (block_align == 0) {
+            throw std::runtime_error("Capture audio format has an invalid block alignment");
+        }
+
         const std::size_t max_pending_bytes =
             static_cast<std::size_t>(capture_format->nAvgBytesPerSec) / 20; // ~50 ms hard cap
 
@@ -340,7 +338,10 @@ void AudioPassthrough::audio_loop(std::stop_token stop_token) {
                         pending_audio.insert(pending_audio.end(), data, data + packet_bytes);
                     }
 
-                    capture_service->ReleaseBuffer(frames);
+                    throw_if_failed(
+                        capture_service->ReleaseBuffer(frames),
+                        "Failed to release captured audio buffer"
+                    );
 
                     if (pending_audio.size() > max_pending_bytes) {
                         const std::size_t excess = pending_audio.size() - max_pending_bytes;
@@ -382,7 +383,10 @@ void AudioPassthrough::audio_loop(std::stop_token stop_token) {
                     pending_audio.pop_front();
                 }
 
-                render_service->ReleaseBuffer(frames_to_write, 0);
+                throw_if_failed(
+                    render_service->ReleaseBuffer(frames_to_write, 0),
+                    "Failed to release audio render buffer"
+                );
             }
         }
 
