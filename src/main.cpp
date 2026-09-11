@@ -23,7 +23,7 @@
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"PS2CaptureStreamWindowClass";
-constexpr wchar_t kWindowTitle[] = L"PS2 Capture Stream - Stage 9";
+constexpr wchar_t kWindowTitle[] = L"PS2 Capture Stream - Stage 10";
 constexpr wchar_t kCaptureHardwareId[] = L"vid_345f&pid_2131";
 constexpr float kDisplayAspect = 4.0f / 3.0f;
 
@@ -51,6 +51,27 @@ enum class ScalingFilter {
     SharpBilinear,
 };
 
+enum class ColorMatrix : std::uint32_t {
+    BT601 = 0,
+    BT709 = 1,
+};
+
+enum class InputRange : std::uint32_t {
+    Limited = 0,
+    Full = 1,
+};
+
+struct alignas(16) ImageSettingsGpu {
+    float brightness;
+    float contrast;
+    float gamma;
+    float saturation;
+    std::uint32_t color_matrix;
+    std::uint32_t input_range;
+    float padding[2];
+};
+static_assert(sizeof(ImageSettingsGpu) % 16 == 0);
+
 struct WindowState {
     bool fullscreen = false;
     LONG_PTR style = 0;
@@ -60,6 +81,12 @@ struct WindowState {
 
 DisplayMode g_display_mode = DisplayMode::FixedResolution;
 ScalingFilter g_scaling_filter = ScalingFilter::Bilinear;
+ColorMatrix g_color_matrix = ColorMatrix::BT601;
+InputRange g_input_range = InputRange::Limited;
+float g_brightness = 0.0f;
+float g_contrast = 1.0f;
+float g_gamma = 1.0f;
+float g_saturation = 1.0f;
 std::size_t g_output_resolution_index = 1;
 WindowState g_window_state;
 UINT g_hud_fps = 0;
@@ -92,23 +119,58 @@ VSOut main(uint vertex_id : SV_VertexID) {
 constexpr char kPixelShaderNearestSource[] = R"(
 Texture2D<float4> yuy2_texture : register(t0);
 
+cbuffer ImageSettings : register(b0) {
+    float brightness;
+    float contrast;
+    float gamma_value;
+    float saturation;
+    uint color_matrix;
+    uint input_range;
+    float2 padding;
+};
+
 struct PSIn {
     float4 position : SV_POSITION;
     float2 uv : TEXCOORD0;
 };
 
-float3 decode_bt601(uint source_x, uint source_y) {
+float3 decode_video(uint source_x, uint source_y) {
     float4 packed = yuy2_texture.Load(int3(source_x / 2, source_y, 0));
-
     float y = ((source_x & 1) == 0) ? packed.r : packed.b;
     float u = packed.g - (128.0 / 255.0);
     float v = packed.a - (128.0 / 255.0);
 
-    float luma = 1.164383 * (y - (16.0 / 255.0));
     float3 rgb;
-    rgb.r = luma + 1.596027 * v;
-    rgb.g = luma - 0.391762 * u - 0.812968 * v;
-    rgb.b = luma + 2.017232 * u;
+    if (input_range == 0) {
+        float luma = 1.164383 * (y - (16.0 / 255.0));
+        if (color_matrix == 0) {
+            rgb.r = luma + 1.596027 * v;
+            rgb.g = luma - 0.391762 * u - 0.812968 * v;
+            rgb.b = luma + 2.017232 * u;
+        } else {
+            rgb.r = luma + 1.792741 * v;
+            rgb.g = luma - 0.213249 * u - 0.532909 * v;
+            rgb.b = luma + 2.112402 * u;
+        }
+    } else {
+        if (color_matrix == 0) {
+            rgb.r = y + 1.402000 * v;
+            rgb.g = y - 0.344136 * u - 0.714136 * v;
+            rgb.b = y + 1.772000 * u;
+        } else {
+            rgb.r = y + 1.574800 * v;
+            rgb.g = y - 0.187324 * u - 0.468124 * v;
+            rgb.b = y + 1.855600 * u;
+        }
+    }
+    return rgb;
+}
+
+float3 apply_image_controls(float3 rgb) {
+    rgb = (rgb - 0.5) * contrast + 0.5 + brightness;
+    float luminance = dot(rgb, float3(0.299, 0.587, 0.114));
+    rgb = lerp(luminance.xxx, rgb, saturation);
+    rgb = pow(saturate(rgb), 1.0 / max(gamma_value, 0.1));
     return saturate(rgb);
 }
 
@@ -121,30 +183,65 @@ float4 main(PSIn input) : SV_TARGET {
     uint source_x = min((uint)(saturate(input.uv.x) * source_width), source_width - 1);
     uint source_y = min((uint)(saturate(input.uv.y) * source_height), source_height - 1);
 
-    return float4(decode_bt601(source_x, source_y), 1.0);
+    return float4(apply_image_controls(decode_video(source_x, source_y)), 1.0);
 }
 )";
 
 constexpr char kPixelShaderBilinearSource[] = R"(
 Texture2D<float4> yuy2_texture : register(t0);
 
+cbuffer ImageSettings : register(b0) {
+    float brightness;
+    float contrast;
+    float gamma_value;
+    float saturation;
+    uint color_matrix;
+    uint input_range;
+    float2 padding;
+};
+
 struct PSIn {
     float4 position : SV_POSITION;
     float2 uv : TEXCOORD0;
 };
 
-float3 decode_bt601(uint source_x, uint source_y) {
+float3 decode_video(uint source_x, uint source_y) {
     float4 packed = yuy2_texture.Load(int3(source_x / 2, source_y, 0));
-
     float y = ((source_x & 1) == 0) ? packed.r : packed.b;
     float u = packed.g - (128.0 / 255.0);
     float v = packed.a - (128.0 / 255.0);
 
-    float luma = 1.164383 * (y - (16.0 / 255.0));
     float3 rgb;
-    rgb.r = luma + 1.596027 * v;
-    rgb.g = luma - 0.391762 * u - 0.812968 * v;
-    rgb.b = luma + 2.017232 * u;
+    if (input_range == 0) {
+        float luma = 1.164383 * (y - (16.0 / 255.0));
+        if (color_matrix == 0) {
+            rgb.r = luma + 1.596027 * v;
+            rgb.g = luma - 0.391762 * u - 0.812968 * v;
+            rgb.b = luma + 2.017232 * u;
+        } else {
+            rgb.r = luma + 1.792741 * v;
+            rgb.g = luma - 0.213249 * u - 0.532909 * v;
+            rgb.b = luma + 2.112402 * u;
+        }
+    } else {
+        if (color_matrix == 0) {
+            rgb.r = y + 1.402000 * v;
+            rgb.g = y - 0.344136 * u - 0.714136 * v;
+            rgb.b = y + 1.772000 * u;
+        } else {
+            rgb.r = y + 1.574800 * v;
+            rgb.g = y - 0.187324 * u - 0.468124 * v;
+            rgb.b = y + 1.855600 * u;
+        }
+    }
+    return rgb;
+}
+
+float3 apply_image_controls(float3 rgb) {
+    rgb = (rgb - 0.5) * contrast + 0.5 + brightness;
+    float luminance = dot(rgb, float3(0.299, 0.587, 0.114));
+    rgb = lerp(luminance.xxx, rgb, saturation);
+    rgb = pow(saturate(rgb), 1.0 / max(gamma_value, 0.1));
     return saturate(rgb);
 }
 
@@ -162,44 +259,69 @@ float4 main(PSIn input) : SV_TARGET {
     uint y0 = (uint)floor(source_pos.y);
     uint x1 = min(x0 + 1, source_width - 1);
     uint y1 = min(y0 + 1, source_height - 1);
-
     float2 fraction = frac(source_pos);
 
-    float3 top = lerp(
-        decode_bt601(x0, y0),
-        decode_bt601(x1, y0),
-        fraction.x
-    );
-    float3 bottom = lerp(
-        decode_bt601(x0, y1),
-        decode_bt601(x1, y1),
-        fraction.x
-    );
-
-    return float4(lerp(top, bottom, fraction.y), 1.0);
+    float3 top = lerp(decode_video(x0, y0), decode_video(x1, y0), fraction.x);
+    float3 bottom = lerp(decode_video(x0, y1), decode_video(x1, y1), fraction.x);
+    return float4(apply_image_controls(lerp(top, bottom, fraction.y)), 1.0);
 }
 )";
 
 constexpr char kPixelShaderSharpBilinearSource[] = R"(
 Texture2D<float4> yuy2_texture : register(t0);
 
+cbuffer ImageSettings : register(b0) {
+    float brightness;
+    float contrast;
+    float gamma_value;
+    float saturation;
+    uint color_matrix;
+    uint input_range;
+    float2 padding;
+};
+
 struct PSIn {
     float4 position : SV_POSITION;
     float2 uv : TEXCOORD0;
 };
 
-float3 decode_bt601(uint source_x, uint source_y) {
+float3 decode_video(uint source_x, uint source_y) {
     float4 packed = yuy2_texture.Load(int3(source_x / 2, source_y, 0));
-
     float y = ((source_x & 1) == 0) ? packed.r : packed.b;
     float u = packed.g - (128.0 / 255.0);
     float v = packed.a - (128.0 / 255.0);
 
-    float luma = 1.164383 * (y - (16.0 / 255.0));
     float3 rgb;
-    rgb.r = luma + 1.596027 * v;
-    rgb.g = luma - 0.391762 * u - 0.812968 * v;
-    rgb.b = luma + 2.017232 * u;
+    if (input_range == 0) {
+        float luma = 1.164383 * (y - (16.0 / 255.0));
+        if (color_matrix == 0) {
+            rgb.r = luma + 1.596027 * v;
+            rgb.g = luma - 0.391762 * u - 0.812968 * v;
+            rgb.b = luma + 2.017232 * u;
+        } else {
+            rgb.r = luma + 1.792741 * v;
+            rgb.g = luma - 0.213249 * u - 0.532909 * v;
+            rgb.b = luma + 2.112402 * u;
+        }
+    } else {
+        if (color_matrix == 0) {
+            rgb.r = y + 1.402000 * v;
+            rgb.g = y - 0.344136 * u - 0.714136 * v;
+            rgb.b = y + 1.772000 * u;
+        } else {
+            rgb.r = y + 1.574800 * v;
+            rgb.g = y - 0.187324 * u - 0.468124 * v;
+            rgb.b = y + 1.855600 * u;
+        }
+    }
+    return rgb;
+}
+
+float3 apply_image_controls(float3 rgb) {
+    rgb = (rgb - 0.5) * contrast + 0.5 + brightness;
+    float luminance = dot(rgb, float3(0.299, 0.587, 0.114));
+    rgb = lerp(luminance.xxx, rgb, saturation);
+    rgb = pow(saturate(rgb), 1.0 / max(gamma_value, 0.1));
     return saturate(rgb);
 }
 
@@ -213,16 +335,8 @@ float3 sample_bilinear(float2 source_pos, uint source_width, uint source_height)
     uint y1 = min(y0 + 1, source_height - 1);
     float2 fraction = frac(source_pos);
 
-    float3 top = lerp(
-        decode_bt601(x0, y0),
-        decode_bt601(x1, y0),
-        fraction.x
-    );
-    float3 bottom = lerp(
-        decode_bt601(x0, y1),
-        decode_bt601(x1, y1),
-        fraction.x
-    );
+    float3 top = lerp(decode_video(x0, y0), decode_video(x1, y0), fraction.x);
+    float3 bottom = lerp(decode_video(x0, y1), decode_video(x1, y1), fraction.x);
     return lerp(top, bottom, fraction.y);
 }
 
@@ -243,15 +357,15 @@ float4 main(PSIn input) : SV_TARGET {
     uint down_y = min(nearest_y + 1, source_height - 1);
 
     float3 neighbours = (
-        decode_bt601(left_x, nearest_y) +
-        decode_bt601(right_x, nearest_y) +
-        decode_bt601(nearest_x, up_y) +
-        decode_bt601(nearest_x, down_y)
+        decode_video(left_x, nearest_y) +
+        decode_video(right_x, nearest_y) +
+        decode_video(nearest_x, up_y) +
+        decode_video(nearest_x, down_y)
     ) * 0.25;
 
     const float sharpness = 0.18;
     float3 sharpened = center + sharpness * (center - neighbours);
-    return float4(saturate(sharpened), 1.0);
+    return float4(apply_image_controls(sharpened), 1.0);
 }
 )";
 
@@ -264,6 +378,7 @@ struct D3DState {
     ID3D11PixelShader* video_pixel_shader_nearest = nullptr;
     ID3D11PixelShader* video_pixel_shader_bilinear = nullptr;
     ID3D11PixelShader* video_pixel_shader_sharp_bilinear = nullptr;
+    ID3D11Buffer* image_settings_buffer = nullptr;
     ID3D11Texture2D* yuy2_texture = nullptr;
     ID3D11ShaderResourceView* yuy2_srv = nullptr;
     UINT viewport_width = 0;
@@ -273,6 +388,7 @@ struct D3DState {
         if (context != nullptr) context->ClearState();
         if (yuy2_srv != nullptr) yuy2_srv->Release();
         if (yuy2_texture != nullptr) yuy2_texture->Release();
+        if (image_settings_buffer != nullptr) image_settings_buffer->Release();
         if (video_pixel_shader_sharp_bilinear != nullptr) video_pixel_shader_sharp_bilinear->Release();
         if (video_pixel_shader_bilinear != nullptr) video_pixel_shader_bilinear->Release();
         if (video_pixel_shader_nearest != nullptr) video_pixel_shader_nearest->Release();
@@ -329,6 +445,39 @@ const char* scaling_filter_name() {
     return "Unknown";
 }
 
+const char* color_matrix_name() {
+    return g_color_matrix == ColorMatrix::BT601 ? "BT.601" : "BT.709";
+}
+
+const char* input_range_name() {
+    return g_input_range == InputRange::Limited ? "Limited" : "Full";
+}
+
+void print_image_settings() {
+    std::cout << "Image: matrix=" << color_matrix_name()
+              << " range=" << input_range_name()
+              << " brightness=" << g_brightness
+              << " contrast=" << g_contrast
+              << " gamma=" << g_gamma
+              << " saturation=" << g_saturation << '\n';
+}
+
+void reset_image_settings() {
+    g_color_matrix = ColorMatrix::BT601;
+    g_input_range = InputRange::Limited;
+    g_brightness = 0.0f;
+    g_contrast = 1.0f;
+    g_gamma = 1.0f;
+    g_saturation = 1.0f;
+    std::cout << "Image settings reset.\n";
+    print_image_settings();
+}
+
+void adjust_setting(float& value, float delta, float minimum, float maximum, const char* name) {
+    value = std::clamp(value + delta, minimum, maximum);
+    std::cout << name << ": " << value << '\n';
+}
+
 void update_hud_text() {
     const auto& resolution = selected_output_resolution();
     const std::string text =
@@ -383,6 +532,16 @@ void cycle_scaling_filter() {
         break;
     }
     std::cout << "Scaling filter: " << scaling_filter_name() << '\n';
+}
+
+void toggle_color_matrix() {
+    g_color_matrix = g_color_matrix == ColorMatrix::BT601 ? ColorMatrix::BT709 : ColorMatrix::BT601;
+    std::cout << "Color matrix: " << color_matrix_name() << '\n';
+}
+
+void toggle_input_range() {
+    g_input_range = g_input_range == InputRange::Limited ? InputRange::Full : InputRange::Limited;
+    std::cout << "Input range: " << input_range_name() << '\n';
 }
 
 void cycle_display_mode() {
@@ -679,6 +838,16 @@ void initialize_video_renderer() {
     sharp_bilinear_blob->Release();
     throw_if_failed(sharp_bilinear_result, "Failed to create sharp bilinear YUY2 pixel shader");
 
+    D3D11_BUFFER_DESC settings_desc{};
+    settings_desc.ByteWidth = sizeof(ImageSettingsGpu);
+    settings_desc.Usage = D3D11_USAGE_DYNAMIC;
+    settings_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    settings_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    throw_if_failed(
+        g_d3d.device->CreateBuffer(&settings_desc, nullptr, &g_d3d.image_settings_buffer),
+        "Failed to create image settings constant buffer"
+    );
+
     D3D11_TEXTURE2D_DESC texture_desc{};
     texture_desc.Width = CaptureSession::kCaptureWidth / 2;
     texture_desc.Height = CaptureSession::kCaptureHeight;
@@ -789,6 +958,26 @@ bool upload_latest_frame(CaptureSession& capture) {
     return true;
 }
 
+void update_image_settings_buffer() {
+    ImageSettingsGpu settings{
+        g_brightness,
+        g_contrast,
+        g_gamma,
+        g_saturation,
+        static_cast<std::uint32_t>(g_color_matrix),
+        static_cast<std::uint32_t>(g_input_range),
+        {0.0f, 0.0f}
+    };
+
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    throw_if_failed(
+        g_d3d.context->Map(g_d3d.image_settings_buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped),
+        "Failed to map image settings constant buffer"
+    );
+    std::memcpy(mapped.pData, &settings, sizeof(settings));
+    g_d3d.context->Unmap(g_d3d.image_settings_buffer, 0);
+}
+
 ID3D11PixelShader* selected_video_pixel_shader() {
     switch (g_scaling_filter) {
     case ScalingFilter::Nearest:
@@ -815,12 +1004,14 @@ void render_frame(CaptureSession& capture) {
     g_d3d.context->ClearRenderTargetView(g_d3d.render_target, clear_color);
 
     if (has_video_frame && g_d3d.viewport_width > 0 && g_d3d.viewport_height > 0) {
+        update_image_settings_buffer();
         const D3D11_VIEWPORT viewport = calculate_video_viewport();
         g_d3d.context->RSSetViewports(1, &viewport);
         g_d3d.context->IASetInputLayout(nullptr);
         g_d3d.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         g_d3d.context->VSSetShader(g_d3d.video_vertex_shader, nullptr, 0);
         g_d3d.context->PSSetShader(selected_video_pixel_shader(), nullptr, 0);
+        g_d3d.context->PSSetConstantBuffers(0, 1, &g_d3d.image_settings_buffer);
         g_d3d.context->PSSetShaderResources(0, 1, &g_d3d.yuy2_srv);
         g_d3d.context->Draw(3, 0);
 
@@ -872,6 +1063,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
 
     case WM_KEYDOWN:
         try {
+            const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
             if (w_param == VK_F11) {
                 toggle_borderless_fullscreen(window);
                 return 0;
@@ -886,6 +1078,34 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
             }
             if (w_param == 'Q') {
                 cycle_scaling_filter();
+                return 0;
+            }
+            if (w_param == 'C') {
+                toggle_color_matrix();
+                return 0;
+            }
+            if (w_param == 'L') {
+                toggle_input_range();
+                return 0;
+            }
+            if (w_param == 'B') {
+                adjust_setting(g_brightness, shift ? -0.05f : 0.05f, -0.50f, 0.50f, "Brightness");
+                return 0;
+            }
+            if (w_param == 'K') {
+                adjust_setting(g_contrast, shift ? -0.10f : 0.10f, 0.50f, 2.00f, "Contrast");
+                return 0;
+            }
+            if (w_param == 'G') {
+                adjust_setting(g_gamma, shift ? -0.10f : 0.10f, 0.50f, 2.50f, "Gamma");
+                return 0;
+            }
+            if (w_param == 'S') {
+                adjust_setting(g_saturation, shift ? -0.10f : 0.10f, 0.00f, 2.00f, "Saturation");
+                return 0;
+            }
+            if (w_param == '0') {
+                reset_image_settings();
                 return 0;
             }
             if (w_param == 'M') {
@@ -986,16 +1206,17 @@ int main() {
         HWND window = create_window(instance);
         initialize_d3d(window);
 
-        std::cout << "Stage 9 running: live PS2 preview with image-quality controls.\n";
-        std::cout << "Color matrix: BT.601 limited-range for 720x480 YUY2.\n";
+        std::cout << "Stage 10 running: live PS2 preview with image controls.\n";
+        print_image_settings();
         std::cout << "Scaling filter: " << scaling_filter_name()
                   << " (Q cycles Nearest/Bilinear/Sharp bilinear).\n";
         std::cout << "Default mode: Fixed resolution.\n";
         print_selected_resolution();
         std::cout << "HUD: selected output resolution + capture FPS in the top-left corner.\n";
-        std::cout << "Hotkeys: F11 = toggle fullscreen, Esc = leave fullscreen, R = cycle output resolution.\n";
-        std::cout << "          Q = cycle scaling filter, M = cycle modes.\n";
-        std::cout << "          1 = Fit 4:3, 2 = Fixed resolution, 3 = Stretch.\n";
+        std::cout << "Hotkeys: F11 fullscreen, Esc leave fullscreen, R output resolution, Q scaling filter.\n";
+        std::cout << "          C BT.601/BT.709, L Limited/Full range, 0 reset image settings.\n";
+        std::cout << "          B brightness, K contrast, G gamma, S saturation; hold Shift to decrease.\n";
+        std::cout << "          M cycle display modes, 1 Fit 4:3, 2 Fixed resolution, 3 Stretch.\n";
         std::cout << "Fixed resolutions: 640x480, 960x720, 1280x960, 1920x1440.\n";
         std::cout << "Audio uses the capture-card input and the current Windows default output device.\n";
         std::cout << "Close the window to exit.\n";
