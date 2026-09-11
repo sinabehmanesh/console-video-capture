@@ -14,13 +14,14 @@
 #include <string>
 #include <vector>
 
+#include "audio_passthrough.h"
 #include "capture_devices.h"
 #include "capture_session.h"
 
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"PS2CaptureStreamWindowClass";
-constexpr wchar_t kWindowTitle[] = L"PS2 Capture Stream - Stage 7";
+constexpr wchar_t kWindowTitle[] = L"PS2 Capture Stream - Stage 8";
 constexpr wchar_t kCaptureHardwareId[] = L"vid_345f&pid_2131";
 constexpr float kDisplayAspect = 4.0f / 3.0f;
 
@@ -732,16 +733,20 @@ int main() {
         CaptureSession capture(std::move(device));
         capture.start();
 
+        AudioPassthrough audio;
+        audio.start();
+
         const HINSTANCE instance = GetModuleHandleW(nullptr);
         HWND window = create_window(instance);
         initialize_d3d(window);
 
-        std::cout << "Stage 7 running: live PS2 preview with fixed output resolutions and borderless fullscreen.\n";
+        std::cout << "Stage 8 running: live PS2 preview with WASAPI audio passthrough.\n";
         std::cout << "Default mode: Fixed resolution.\n";
         print_selected_resolution();
         std::cout << "Hotkeys: F11 = toggle fullscreen, Esc = leave fullscreen, R = cycle output resolution.\n";
         std::cout << "          M = cycle modes, 1 = Fit 4:3, 2 = Fixed resolution, 3 = Stretch.\n";
         std::cout << "Fixed resolutions: 640x480, 960x720, 1280x960, 1920x1440.\n";
+        std::cout << "Audio uses the capture-card input and the current Windows default output device.\n";
         std::cout << "Close the window to exit.\n";
 
         MSG message{};
@@ -760,6 +765,7 @@ int main() {
             if (running) render_frame(capture);
         }
 
+        audio.stop();
         capture.stop();
         std::cout << "Captured frames: " << capture.frame_count() << '\n';
         return static_cast<int>(message.wParam);
