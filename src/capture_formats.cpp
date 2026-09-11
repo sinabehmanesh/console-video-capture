@@ -14,6 +14,8 @@
 
 namespace {
 
+constexpr DWORD kVideoStream = static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM);
+
 void throw_if_failed(HRESULT result, const char* message) {
     if (FAILED(result)) {
         throw std::runtime_error(
@@ -112,7 +114,7 @@ std::vector<CaptureFormatInfo> enumerate_video_formats(const CaptureDeviceInfo& 
     for (DWORD index = 0;; ++index) {
         IMFMediaType* media_type = nullptr;
         const HRESULT type_result = reader->GetNativeMediaType(
-            MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+            kVideoStream,
             index,
             &media_type
         );
