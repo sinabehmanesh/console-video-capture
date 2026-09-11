@@ -2,6 +2,7 @@
 
 #include <windows.h>
 #include <mfapi.h>
+#include <mferror.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
 #include <objbase.h>
@@ -12,6 +13,8 @@
 #include <string>
 
 namespace {
+
+constexpr DWORD kVideoStream = static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM);
 
 void throw_if_failed(HRESULT result, const char* message) {
     if (FAILED(result)) {
@@ -55,7 +58,7 @@ IMFMediaType* find_yuy2_1080p60(IMFSourceReader* reader) {
     for (DWORD index = 0;; ++index) {
         IMFMediaType* media_type = nullptr;
         const HRESULT result = reader->GetNativeMediaType(
-            MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+            kVideoStream,
             index,
             &media_type
         );
@@ -165,7 +168,7 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
         }
 
         const HRESULT set_type_result = reader->SetCurrentMediaType(
-            MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+            kVideoStream,
             nullptr,
             selected_type
         );
@@ -187,7 +190,7 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
             IMFSample* sample = nullptr;
 
             const HRESULT read_result = reader->ReadSample(
-                MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+                kVideoStream,
                 0,
                 &stream_index,
                 &flags,
