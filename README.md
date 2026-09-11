@@ -1,116 +1,58 @@
 # PlayStation2 Capture Stream
 
-A native Windows C++ utility for low-latency preview of a PlayStation 2 through a USB capture card.
-
-Pipeline:
+A small native Windows C++ app for using a USB capture card as a low-latency PS2 display.
 
 ```text
-PS2 -> HDMI adapter -> USB capture card -> Media Foundation -> Direct3D 11 -> display
-                                  \-> WASAPI -> default Windows audio output
+PS2 -> HDMI adapter -> USB capture card -> Media Foundation -> Direct3D 11
+                                  \-> WASAPI -> Windows audio output
 ```
 
-## Current status
+## Features
 
-Stage 10 is implemented and validated on the current feature branch:
+- `720x480 @ 60 fps` YUY2 capture
+- D3D11 rendering with 4:3, fixed-size and stretch modes
+- Fixed output sizes: `640x480`, `960x720`, `1280x960`, `1920x1440`
+- Borderless fullscreen
+- HUD with output resolution, FPS and built-in help
+- WASAPI audio passthrough
+- Nearest, Bilinear and Sharp Bilinear scaling
+- BT.601 / BT.709 and Limited / Full range controls
+- Brightness, contrast, gamma and saturation controls
+- Windows application icon and release builds through GitHub Actions
 
-- Win32 window
-- Direct3D 11 swap chain and rendering
-- Media Foundation device discovery
-- Native capture format enumeration
-- Live `720x480 @ 60 fps YUY2` capture from the target capture card
-- Capture-card selection by stable USB hardware ID (`VID_345F:PID_2131`)
-- Latest-frame handoff from the capture thread
-- GPU upload of packed YUY2 frames
-- D3D11 pixel-shader YUV -> RGB conversion
-- Live video preview in the application window
-- Centered 4:3 fit mode with black borders
-- Selectable fixed output sizes: `640x480`, `960x720`, `1280x960`, `1920x1440`
-- Minimum window size follows the selected fixed output size
-- Stretch mode for comparison/debugging
-- Borderless fullscreen on the current monitor
-- Window size and position restored when leaving fullscreen
-- D3D-rendered HUD with selected output resolution and capture FPS
-- WASAPI capture-card audio passthrough to the current default Windows output device
-- Audio thread promoted to the Windows `Pro Audio` MMCSS task when available
-- Selectable scaling filters: Nearest, Bilinear, and Sharp bilinear
-- Live color-matrix selection: BT.601 / BT.709
-- Live input-range selection: Limited / Full
-- GPU-side brightness, contrast, gamma, and saturation controls
-- Validated default color path for the current PS2/HDMI/capture-card chain: `BT.709 + Full range`
+The current setup is tuned for the capture chain used during development, where `BT.709 + Full range` gives the best result.
 
-### Display hotkeys
+## Controls
 
-- `F11` - toggle borderless fullscreen
-- `Esc` - leave fullscreen
-- `R` - cycle fixed output resolution
-- `Q` - cycle scaling filters: Nearest / Bilinear / Sharp bilinear
-- `M` - cycle display modes
-- `1` - Fit 4:3
-- `2` - Fixed resolution
-- `3` - Stretch
+| Key | Action |
+| --- | --- |
+| `F11` | Toggle fullscreen |
+| `Esc` | Leave fullscreen |
+| `R` | Cycle output resolution |
+| `Q` | Cycle scaling filter |
+| `M` | Cycle display mode |
+| `1` / `2` / `3` | 4:3 / Fixed / Stretch |
+| `C` | BT.601 / BT.709 |
+| `L` | Limited / Full range |
+| `B` / `Shift+B` | Brightness +/- |
+| `K` / `Shift+K` | Contrast +/- |
+| `G` / `Shift+G` | Gamma +/- |
+| `S` / `Shift+S` | Saturation +/- |
+| `0` | Reset image settings |
+| `H` | Show/hide help |
 
-### Image hotkeys
+## Build
 
-- `C` - toggle BT.601 / BT.709 color matrix
-- `L` - toggle Limited / Full input range
-- `B` - increase brightness
-- `Shift+B` - decrease brightness
-- `K` - increase contrast
-- `Shift+K` - decrease contrast
-- `G` - increase gamma
-- `Shift+G` - decrease gamma
-- `S` - increase saturation
-- `Shift+S` - decrease saturation
-- `0` - reset image controls to the validated defaults
-
-Current defaults:
-
-```text
-Matrix:     BT.709
-Range:      Full
-Brightness: 0.0
-Contrast:   1.0
-Gamma:      1.0
-Saturation: 1.0
-Scaling:    Bilinear
-```
-
-The scaling-filter differences can be subtle because the upstream PS2-to-HDMI adapter and capture chain already perform their own processing. The application cannot reconstruct detail that is lost before capture.
-
-## Build with MSVC
-
-From a Visual Studio Developer Command Prompt or Developer PowerShell:
+Use a Visual Studio Developer Command Prompt or Developer PowerShell:
 
 ```powershell
 cmake -S . -B build -G "NMake Makefiles"
 cmake --build build
-```
-
-Run:
-
-```powershell
 .\build\ps2-capture-stream.exe
 ```
 
-## Roadmap
+## Notes
 
-1. Win32 + D3D11 foundation
-2. Media Foundation capture-device discovery
-3. Capture format enumeration
-4. Live low-latency frame capture
-5. GPU YUY2 rendering
-6. Scaling/aspect-ratio modes
-7. Borderless fullscreen and selectable fixed output sizes
-8. WASAPI audio passthrough
-9. Image-quality controls and scaling filters
-10. Latency/statistics tuning
-11. Packaging/release
+This project is intentionally Windows-only and uses MSVC x64, Media Foundation, Direct3D 11 and WASAPI. It has no telemetry, updater or network dependency.
 
-## Design constraints
-
-- Native Windows application
-- MSVC x64 toolchain
-- No network dependency
-- No telemetry
-- No auto-updater
-- No mandatory installer
+For tagged releases, see [RELEASING.md](RELEASING.md).
