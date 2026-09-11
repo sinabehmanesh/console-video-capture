@@ -10,7 +10,7 @@ PS2 -> HDMI adapter -> USB capture card -> Media Foundation -> Direct3D 11 -> di
 
 ## Current status
 
-Stage 6 is implemented on `feature/low-latency-capture-preview`:
+Stage 7 is implemented on `feature/low-latency-capture-preview`:
 
 - Win32 window
 - Direct3D 11 swap chain and rendering
@@ -25,15 +25,19 @@ Stage 6 is implemented on `feature/low-latency-capture-preview`:
 - Centered 4:3 fit mode with black borders
 - Fixed `960x720` centered mode
 - Stretch mode for comparison/debugging
+- Borderless fullscreen on the current monitor
+- Window size and position restored when leaving fullscreen
 
 ### Display hotkeys
 
+- `F11` - toggle borderless fullscreen
+- `Esc` - leave fullscreen
 - `M` - cycle display modes
 - `1` - Fit 4:3
 - `2` - Fixed 960x720
 - `3` - Stretch
 
-Borderless fullscreen, audio passthrough, and deeper latency tuning are later stages.
+Audio passthrough and deeper latency/statistics tuning are later stages.
 
 ## Build with MSVC
 
@@ -58,8 +62,8 @@ Run:
 4. Live low-latency frame capture
 5. GPU YUY2 rendering
 6. Scaling/aspect-ratio modes
-7. Borderless fullscreen, audio passthrough, and latency/statistics tuning
-8. Packaging/release
+7. Borderless fullscreen
+8. Audio passthrough, latency/statistics tuning, packaging/release
 
 ## Design constraints
 
