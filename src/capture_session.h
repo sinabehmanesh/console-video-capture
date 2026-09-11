@@ -10,8 +10,10 @@
 
 class CaptureSession {
 public:
-    static constexpr std::uint32_t kCaptureWidth = 1920;
-    static constexpr std::uint32_t kCaptureHeight = 1080;
+    // Use a USB2-safe uncompressed mode for the PS2 path. 720x480 YUY2 at 60 Hz
+    // fits within practical USB2 bandwidth and matches the PS2-era source well.
+    static constexpr std::uint32_t kCaptureWidth = 720;
+    static constexpr std::uint32_t kCaptureHeight = 480;
     static constexpr std::uint32_t kBytesPerPixel = 2;
     static constexpr std::size_t kFrameBytes =
         static_cast<std::size_t>(kCaptureWidth) *
@@ -30,8 +32,6 @@ public:
     [[nodiscard]] std::uint64_t frame_count() const noexcept;
     [[nodiscard]] bool running() const noexcept;
 
-    // Copies only when a newer frame than sequence is available.
-    // sequence is updated to the copied frame's sequence number.
     [[nodiscard]] bool copy_latest_frame(
         std::vector<std::uint8_t>& destination,
         std::uint64_t& sequence
