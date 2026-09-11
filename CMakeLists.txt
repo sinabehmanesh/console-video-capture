@@ -12,6 +12,7 @@ add_executable(ps2-capture-stream
     src/capture_devices.cpp
     src/capture_formats.cpp
     src/capture_session.cpp
+    src/hud_renderer.cpp
 )
 
 target_compile_definitions(ps2-capture-stream PRIVATE
