@@ -9,6 +9,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_executable(ps2-capture-stream
     src/main.cpp
     src/capture_devices.cpp
+    src/capture_formats.cpp
 )
 
 target_compile_definitions(ps2-capture-stream PRIVATE
@@ -37,6 +38,7 @@ target_link_libraries(ps2-capture-stream PRIVATE
     dxguid
     mf
     mfplat
+    mfreadwrite
     mfuuid
     ole32
 )
