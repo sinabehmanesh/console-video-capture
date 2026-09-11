@@ -19,7 +19,7 @@
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"PS2CaptureStreamWindowClass";
-constexpr wchar_t kWindowTitle[] = L"PS2 Capture Stream - Stage 6";
+constexpr wchar_t kWindowTitle[] = L"PS2 Capture Stream - Stage 7";
 constexpr wchar_t kCaptureHardwareId[] = L"vid_345f&pid_2131";
 constexpr float kDisplayAspect = 4.0f / 3.0f;
 constexpr UINT kFixedWidth = 960;
@@ -31,7 +31,15 @@ enum class DisplayMode {
     Stretch,
 };
 
+struct WindowState {
+    bool fullscreen = false;
+    LONG_PTR style = 0;
+    LONG_PTR ex_style = 0;
+    WINDOWPLACEMENT placement{sizeof(WINDOWPLACEMENT)};
+};
+
 DisplayMode g_display_mode = DisplayMode::Fit4x3;
+WindowState g_window_state;
 
 constexpr char kVertexShaderSource[] = R"(
 struct VSOut {
@@ -169,6 +177,77 @@ void cycle_display_mode() {
         break;
     }
     std::cout << "Display mode: " << display_mode_name(g_display_mode) << '\n';
+}
+
+void enter_borderless_fullscreen(HWND window) {
+    if (g_window_state.fullscreen) return;
+
+    g_window_state.style = GetWindowLongPtrW(window, GWL_STYLE);
+    g_window_state.ex_style = GetWindowLongPtrW(window, GWL_EXSTYLE);
+    g_window_state.placement.length = sizeof(WINDOWPLACEMENT);
+
+    if (!GetWindowPlacement(window, &g_window_state.placement)) {
+        throw std::runtime_error("Failed to save window placement");
+    }
+
+    MONITORINFO monitor_info{};
+    monitor_info.cbSize = sizeof(monitor_info);
+    const HMONITOR monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+    if (monitor == nullptr || !GetMonitorInfoW(monitor, &monitor_info)) {
+        throw std::runtime_error("Failed to query current monitor");
+    }
+
+    SetWindowLongPtrW(window, GWL_STYLE, g_window_state.style & ~WS_OVERLAPPEDWINDOW);
+    SetWindowLongPtrW(window, GWL_EXSTYLE, g_window_state.ex_style);
+
+    if (!SetWindowPos(
+            window,
+            HWND_TOP,
+            monitor_info.rcMonitor.left,
+            monitor_info.rcMonitor.top,
+            monitor_info.rcMonitor.right - monitor_info.rcMonitor.left,
+            monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top,
+            SWP_NOOWNERZORDER | SWP_FRAMECHANGED
+        )) {
+        throw std::runtime_error("Failed to enter borderless fullscreen");
+    }
+
+    g_window_state.fullscreen = true;
+    std::cout << "Fullscreen: on\n";
+}
+
+void exit_borderless_fullscreen(HWND window) {
+    if (!g_window_state.fullscreen) return;
+
+    SetWindowLongPtrW(window, GWL_STYLE, g_window_state.style);
+    SetWindowLongPtrW(window, GWL_EXSTYLE, g_window_state.ex_style);
+
+    if (!SetWindowPlacement(window, &g_window_state.placement)) {
+        throw std::runtime_error("Failed to restore window placement");
+    }
+
+    if (!SetWindowPos(
+            window,
+            nullptr,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED
+        )) {
+        throw std::runtime_error("Failed to leave borderless fullscreen");
+    }
+
+    g_window_state.fullscreen = false;
+    std::cout << "Fullscreen: off\n";
+}
+
+void toggle_borderless_fullscreen(HWND window) {
+    if (g_window_state.fullscreen) {
+        exit_borderless_fullscreen(window);
+    } else {
+        enter_borderless_fullscreen(window);
+    }
 }
 
 D3D11_VIEWPORT calculate_video_viewport() {
@@ -476,24 +555,36 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
         return 0;
 
     case WM_KEYDOWN:
-        if (w_param == 'M') {
-            cycle_display_mode();
-            return 0;
-        }
-        if (w_param == '1') {
-            g_display_mode = DisplayMode::Fit4x3;
-            std::cout << "Display mode: Fit 4:3\n";
-            return 0;
-        }
-        if (w_param == '2') {
-            g_display_mode = DisplayMode::Fixed960x720;
-            std::cout << "Display mode: Fixed 960x720\n";
-            return 0;
-        }
-        if (w_param == '3') {
-            g_display_mode = DisplayMode::Stretch;
-            std::cout << "Display mode: Stretch\n";
-            return 0;
+        try {
+            if (w_param == VK_F11) {
+                toggle_borderless_fullscreen(window);
+                return 0;
+            }
+            if (w_param == VK_ESCAPE && g_window_state.fullscreen) {
+                exit_borderless_fullscreen(window);
+                return 0;
+            }
+            if (w_param == 'M') {
+                cycle_display_mode();
+                return 0;
+            }
+            if (w_param == '1') {
+                g_display_mode = DisplayMode::Fit4x3;
+                std::cout << "Display mode: Fit 4:3\n";
+                return 0;
+            }
+            if (w_param == '2') {
+                g_display_mode = DisplayMode::Fixed960x720;
+                std::cout << "Display mode: Fixed 960x720\n";
+                return 0;
+            }
+            if (w_param == '3') {
+                g_display_mode = DisplayMode::Stretch;
+                std::cout << "Display mode: Stretch\n";
+                return 0;
+            }
+        } catch (const std::exception& error) {
+            std::cerr << "Window mode error: " << error.what() << '\n';
         }
         break;
 
@@ -565,9 +656,10 @@ int main() {
         HWND window = create_window(instance);
         initialize_d3d(window);
 
-        std::cout << "Stage 6 running: live PS2 preview with centered scaling modes.\n";
+        std::cout << "Stage 7 running: live PS2 preview with scaling modes and borderless fullscreen.\n";
         std::cout << "Default mode: Fit 4:3.\n";
-        std::cout << "Hotkeys: M = cycle modes, 1 = Fit 4:3, 2 = Fixed 960x720, 3 = Stretch.\n";
+        std::cout << "Hotkeys: F11 = toggle fullscreen, Esc = leave fullscreen, M = cycle modes.\n";
+        std::cout << "          1 = Fit 4:3, 2 = Fixed 960x720, 3 = Stretch.\n";
         std::cout << "Close the window to exit.\n";
 
         MSG message{};
