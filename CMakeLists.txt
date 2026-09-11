@@ -13,9 +13,16 @@ add_executable(ps2-capture-stream
 target_compile_definitions(ps2-capture-stream PRIVATE
     WIN32_LEAN_AND_MEAN
     NOMINMAX
+    UNICODE
+    _UNICODE
 )
 
-if (MINGW)
+if (MSVC)
+    target_compile_options(ps2-capture-stream PRIVATE
+        /W4
+        /permissive-
+    )
+elseif (MINGW)
     target_compile_options(ps2-capture-stream PRIVATE
         -Wall
         -Wextra
