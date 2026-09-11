@@ -8,6 +8,7 @@
 #include <objbase.h>
 
 #include <chrono>
+#include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -78,8 +79,8 @@ IMFMediaType* find_yuy2_1080p60(IMFSourceReader* reader) {
             SUCCEEDED(media_type->GetGUID(MF_MT_SUBTYPE, &subtype)) &&
             subtype == MFVideoFormat_YUY2 &&
             SUCCEEDED(MFGetAttributeSize(media_type, MF_MT_FRAME_SIZE, &width, &height)) &&
-            width == 1920 &&
-            height == 1080 &&
+            width == CaptureSession::kCaptureWidth &&
+            height == CaptureSession::kCaptureHeight &&
             SUCCEEDED(MFGetAttributeRatio(media_type, MF_MT_FRAME_RATE, &fps_num, &fps_den)) &&
             fps_den != 0 &&
             fps_num == 60 * fps_den;
@@ -108,6 +109,12 @@ void CaptureSession::start() {
         return;
     }
 
+    {
+        std::scoped_lock lock(frame_mutex_);
+        latest_frame_.resize(kFrameBytes);
+        latest_frame_sequence_ = 0;
+    }
+
     frame_count_.store(0, std::memory_order_relaxed);
     thread_ = std::jthread([this](std::stop_token stop_token) {
         capture_loop(stop_token);
@@ -131,6 +138,22 @@ bool CaptureSession::running() const noexcept {
     return running_.load(std::memory_order_acquire);
 }
 
+bool CaptureSession::copy_latest_frame(
+    std::vector<std::uint8_t>& destination,
+    std::uint64_t& sequence
+) const {
+    std::scoped_lock lock(frame_mutex_);
+
+    if (latest_frame_sequence_ == 0 || latest_frame_sequence_ == sequence) {
+        return false;
+    }
+
+    destination.resize(kFrameBytes);
+    std::memcpy(destination.data(), latest_frame_.data(), kFrameBytes);
+    sequence = latest_frame_sequence_;
+    return true;
+}
+
 void CaptureSession::capture_loop(std::stop_token stop_token) {
     const HRESULT com_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(com_result)) {
@@ -151,7 +174,6 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
             "Failed to create source-reader attributes"
         );
 
-        // Ask Media Foundation to avoid unnecessary buffering where supported.
         reader_attributes->SetUINT32(MF_LOW_LATENCY, TRUE);
 
         const HRESULT reader_result = MFCreateSourceReaderFromMediaSource(
@@ -210,6 +232,32 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
             }
 
             if (sample != nullptr) {
+                IMFMediaBuffer* buffer = nullptr;
+                const HRESULT buffer_result = sample->ConvertToContiguousBuffer(&buffer);
+
+                if (SUCCEEDED(buffer_result) && buffer != nullptr) {
+                    BYTE* data = nullptr;
+                    DWORD max_length = 0;
+                    DWORD current_length = 0;
+
+                    const HRESULT lock_result = buffer->Lock(
+                        &data,
+                        &max_length,
+                        &current_length
+                    );
+
+                    if (SUCCEEDED(lock_result)) {
+                        if (current_length >= kFrameBytes) {
+                            std::scoped_lock lock(frame_mutex_);
+                            std::memcpy(latest_frame_.data(), data, kFrameBytes);
+                            ++latest_frame_sequence_;
+                        }
+                        buffer->Unlock();
+                    }
+
+                    buffer->Release();
+                }
+
                 frame_count_.fetch_add(1, std::memory_order_relaxed);
                 sample->Release();
             }
