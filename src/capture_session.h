@@ -3,6 +3,7 @@
 #include "capture_devices.h"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <thread>
@@ -10,17 +11,6 @@
 
 class CaptureSession {
 public:
-    // Renderer-side frame size. Xbox capture profiles can use either a native
-    // 720p60 source or a native 1080p source; Media Foundation normalizes the
-    // frames to 1080p YUY2 before they reach the renderer.
-    static constexpr std::uint32_t kCaptureWidth = 1920;
-    static constexpr std::uint32_t kCaptureHeight = 1080;
-    static constexpr std::uint32_t kBytesPerPixel = 2;
-    static constexpr std::size_t kFrameBytes =
-        static_cast<std::size_t>(kCaptureWidth) *
-        static_cast<std::size_t>(kCaptureHeight) *
-        kBytesPerPixel;
-
     explicit CaptureSession(CaptureDeviceInfo device);
     ~CaptureSession();
 
@@ -32,6 +22,11 @@ public:
 
     [[nodiscard]] std::uint64_t frame_count() const noexcept;
     [[nodiscard]] bool running() const noexcept;
+
+    [[nodiscard]] std::uint32_t capture_width() const noexcept;
+    [[nodiscard]] std::uint32_t capture_height() const noexcept;
+    [[nodiscard]] std::uint32_t capture_fps() const noexcept;
+    [[nodiscard]] std::size_t frame_bytes() const noexcept;
 
     [[nodiscard]] bool copy_latest_frame(
         std::vector<std::uint8_t>& destination,
