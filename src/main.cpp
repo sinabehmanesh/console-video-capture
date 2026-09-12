@@ -22,8 +22,8 @@
 
 namespace {
 
-constexpr wchar_t kWindowClassName[] = L"PS2CaptureStreamWindowClass";
-constexpr wchar_t kWindowTitle[] = L"PS2 Capture Stream - Native NV12";
+constexpr wchar_t kWindowClassName[] = L"ConsoleVideoCaptureWindowClass";
+constexpr wchar_t kWindowTitle[] = L"Console Video Capture - Native NV12";
 constexpr wchar_t kCaptureHardwareId[] = L"vid_345f&pid_2131";
 
 struct OutputResolution {
@@ -1067,7 +1067,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
 
 HWND create_window(HINSTANCE instance) {
     WNDCLASSEXW window_class{};
-    window_class.cbSize = sizeof(window_class);
+    window_class.cbSize = sizeof(WNDCLASSEXW);
     window_class.style = CS_HREDRAW | CS_VREDRAW;
     window_class.lpfnWndProc = window_proc;
     window_class.hInstance = instance;
@@ -1158,7 +1158,7 @@ int main() {
         return static_cast<int>(message.wParam);
     } catch (const std::exception& error) {
         std::cerr << "Fatal error: " << error.what() << '\n';
-        MessageBoxA(nullptr, error.what(), "ps2-capture-stream", MB_OK | MB_ICONERROR);
+        MessageBoxA(nullptr, error.what(), "console-video-capture", MB_OK | MB_ICONERROR);
         return 1;
     }
 }
