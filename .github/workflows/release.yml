@@ -25,7 +25,7 @@ jobs:
       - name: Verify executable
         shell: pwsh
         run: |
-          $exe = "build/Release/ps2-capture-stream.exe"
+          $exe = "build/Release/console-video-capture.exe"
           if (-not (Test-Path $exe)) {
             throw "Expected executable was not produced: $exe"
           }
@@ -36,6 +36,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$env:GITHUB_REF_NAME" `
-            "build/Release/ps2-capture-stream.exe" `
+            "build/Release/console-video-capture.exe" `
             --title "$env:GITHUB_REF_NAME" `
             --generate-notes
