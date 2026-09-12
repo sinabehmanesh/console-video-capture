@@ -7,7 +7,6 @@
 #include <mfreadwrite.h>
 #include <objbase.h>
 
-#include <array>
 #include <chrono>
 #include <cstring>
 #include <iostream>
@@ -100,6 +99,88 @@ void log_native_formats(IMFSourceReader* reader) {
     }
 }
 
+bool configure_native_mode(
+    IMFMediaSource* media_source,
+    std::uint32_t width,
+    std::uint32_t height,
+    std::uint32_t fps
+) {
+    IMFPresentationDescriptor* presentation = nullptr;
+    if (FAILED(media_source->CreatePresentationDescriptor(&presentation)) || presentation == nullptr) {
+        return false;
+    }
+
+    BOOL selected = FALSE;
+    IMFStreamDescriptor* stream = nullptr;
+    const HRESULT stream_result = presentation->GetStreamDescriptorByIndex(0, &selected, &stream);
+    presentation->Release();
+    if (FAILED(stream_result) || stream == nullptr) {
+        return false;
+    }
+
+    IMFMediaTypeHandler* handler = nullptr;
+    const HRESULT handler_result = stream->GetMediaTypeHandler(&handler);
+    stream->Release();
+    if (FAILED(handler_result) || handler == nullptr) {
+        return false;
+    }
+
+    DWORD type_count = 0;
+    handler->GetMediaTypeCount(&type_count);
+
+    IMFMediaType* fallback = nullptr;
+
+    for (DWORD index = 0; index < type_count; ++index) {
+        IMFMediaType* type = nullptr;
+        if (FAILED(handler->GetMediaTypeByIndex(index, &type)) || type == nullptr) {
+            continue;
+        }
+
+        GUID subtype{};
+        UINT32 type_width = 0;
+        UINT32 type_height = 0;
+        UINT32 fps_num = 0;
+        UINT32 fps_den = 1;
+
+        const bool matches =
+            SUCCEEDED(type->GetGUID(MF_MT_SUBTYPE, &subtype)) &&
+            SUCCEEDED(MFGetAttributeSize(type, MF_MT_FRAME_SIZE, &type_width, &type_height)) &&
+            SUCCEEDED(MFGetAttributeRatio(type, MF_MT_FRAME_RATE, &fps_num, &fps_den)) &&
+            fps_den != 0 &&
+            type_width == width &&
+            type_height == height &&
+            fps_num == fps * fps_den;
+
+        if (!matches) {
+            type->Release();
+            continue;
+        }
+
+        if (subtype == MFVideoFormat_MJPG) {
+            const HRESULT result = handler->SetCurrentMediaType(type);
+            type->Release();
+            if (fallback != nullptr) fallback->Release();
+            handler->Release();
+            return SUCCEEDED(result);
+        }
+
+        if (fallback == nullptr && subtype == MFVideoFormat_NV12) {
+            fallback = type;
+        } else {
+            type->Release();
+        }
+    }
+
+    bool configured = false;
+    if (fallback != nullptr) {
+        configured = SUCCEEDED(handler->SetCurrentMediaType(fallback));
+        fallback->Release();
+    }
+
+    handler->Release();
+    return configured;
+}
+
 bool try_set_yuy2_output_type(IMFSourceReader* reader, UINT32 fps) {
     IMFMediaType* output_type = nullptr;
     if (FAILED(MFCreateMediaType(&output_type)) || output_type == nullptr) {
@@ -134,20 +215,6 @@ bool try_set_yuy2_output_type(IMFSourceReader* reader, UINT32 fps) {
 
     output_type->Release();
     return SUCCEEDED(result);
-}
-
-UINT32 select_hd_output_type(IMFSourceReader* reader) {
-    // 60 fps is ideal for Xbox 360. If the card/decoder stack cannot provide
-    // it, keep the HD resolution and fall back to common lower frame rates.
-    constexpr std::array<UINT32, 3> kPreferredFps{{60, 30, 50}};
-
-    for (const UINT32 fps : kPreferredFps) {
-        if (try_set_yuy2_output_type(reader, fps)) {
-            return fps;
-        }
-    }
-
-    return 0;
 }
 
 bool copy_sample_to_frame(IMFSample* sample, std::vector<std::uint8_t>& destination) {
@@ -215,8 +282,23 @@ bool copy_sample_to_frame(IMFSample* sample, std::vector<std::uint8_t>& destinat
 
 } // namespace
 
+CaptureSession::CaptureMode CaptureSession::choose_capture_mode() {
+    std::cout << "\nXbox capture mode:\n"
+              << "  [1] 1280x720 @ 60 fps  - smooth / recommended\n"
+              << "  [2] 1920x1080 @ 50 fps - sharper, high motion\n"
+              << "  [3] 1920x1080 @ 30 fps - sharper, lower frame rate\n"
+              << "Select mode [1]: ";
+
+    std::string choice;
+    std::getline(std::cin, choice);
+
+    if (choice == "2") return {1920, 1080, 50};
+    if (choice == "3") return {1920, 1080, 30};
+    return {1280, 720, 60};
+}
+
 CaptureSession::CaptureSession(CaptureDeviceInfo device)
-    : device_(std::move(device)) {}
+    : device_(std::move(device)), mode_(choose_capture_mode()) {}
 
 CaptureSession::~CaptureSession() {
     stop();
@@ -286,6 +368,12 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
     try {
         media_source = create_media_source(device_);
 
+        if (!configure_native_mode(media_source, mode_.width, mode_.height, mode_.fps)) {
+            throw std::runtime_error(
+                "Selected native capture mode is not available on this device"
+            );
+        }
+
         IMFAttributes* reader_attributes = nullptr;
         throw_if_failed(
             MFCreateAttributes(&reader_attributes, 2),
@@ -305,17 +393,16 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
 
         log_native_formats(reader);
 
-        const UINT32 selected_fps = select_hd_output_type(reader);
-        if (selected_fps == 0) {
+        if (!try_set_yuy2_output_type(reader, mode_.fps)) {
             throw std::runtime_error(
-                "Capture device/Media Foundation cannot provide 1280x720 YUY2. "
-                "Check the native format list above; HD capture usually requires an MJPEG native mode."
+                "Media Foundation could not convert the selected capture mode to 1920x1080 YUY2"
             );
         }
 
         std::wcout << L"Capture started on " << device_.name
-                   << L" using 1280x720 @ " << selected_fps
-                   << L" fps YUY2 (Media Foundation conversion enabled).\n";
+                   << L" from " << mode_.width << L"x" << mode_.height
+                   << L" @ " << mode_.fps
+                   << L" fps, outputting 1920x1080 YUY2 to the renderer.\n";
 
         running_.store(true, std::memory_order_release);
 
@@ -343,9 +430,7 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
             }
 
             if ((flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0) {
-                if (sample != nullptr) {
-                    sample->Release();
-                }
+                if (sample != nullptr) sample->Release();
                 break;
             }
 
@@ -359,7 +444,7 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
                     }
 
                     if (!reported_first_frame) {
-                        std::cout << "First HD YUY2 frame published to renderer ("
+                        std::cout << "First 1080p YUY2 frame published to renderer ("
                                   << kFrameBytes << " bytes).\n";
                         reported_first_frame = true;
                     }
@@ -385,9 +470,7 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
 
     running_.store(false, std::memory_order_release);
 
-    if (reader != nullptr) {
-        reader->Release();
-    }
+    if (reader != nullptr) reader->Release();
     if (media_source != nullptr) {
         media_source->Shutdown();
         media_source->Release();
