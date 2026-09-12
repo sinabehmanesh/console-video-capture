@@ -12,13 +12,11 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace {
 
 constexpr DWORD kVideoStream = static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM);
-constexpr std::size_t kRowBytes =
-    static_cast<std::size_t>(CaptureSession::kCaptureWidth) *
-    CaptureSession::kBytesPerPixel;
 
 void throw_if_failed(HRESULT result, const char* message) {
     if (FAILED(result)) {
@@ -59,9 +57,9 @@ IMFMediaSource* create_media_source(const CaptureDeviceInfo& device) {
 }
 
 const wchar_t* subtype_name(const GUID& subtype) {
-    if (subtype == MFVideoFormat_YUY2) return L"YUY2";
-    if (subtype == MFVideoFormat_MJPG) return L"MJPG";
     if (subtype == MFVideoFormat_NV12) return L"NV12";
+    if (subtype == MFVideoFormat_MJPG) return L"MJPG";
+    if (subtype == MFVideoFormat_YUY2) return L"YUY2";
     if (subtype == MFVideoFormat_RGB32) return L"RGB32";
     if (subtype == MFVideoFormat_H264) return L"H264";
     return L"other";
@@ -99,42 +97,18 @@ void log_native_formats(IMFSourceReader* reader) {
     }
 }
 
-bool configure_native_mode(
-    IMFMediaSource* media_source,
+bool select_native_nv12_mode(
+    IMFSourceReader* reader,
     std::uint32_t width,
     std::uint32_t height,
     std::uint32_t fps
 ) {
-    IMFPresentationDescriptor* presentation = nullptr;
-    if (FAILED(media_source->CreatePresentationDescriptor(&presentation)) || presentation == nullptr) {
-        return false;
-    }
+    for (DWORD index = 0;; ++index) {
+        IMFMediaType* media_type = nullptr;
+        const HRESULT result = reader->GetNativeMediaType(kVideoStream, index, &media_type);
 
-    BOOL selected = FALSE;
-    IMFStreamDescriptor* stream = nullptr;
-    const HRESULT stream_result = presentation->GetStreamDescriptorByIndex(0, &selected, &stream);
-    presentation->Release();
-    if (FAILED(stream_result) || stream == nullptr) {
-        return false;
-    }
-
-    IMFMediaTypeHandler* handler = nullptr;
-    const HRESULT handler_result = stream->GetMediaTypeHandler(&handler);
-    stream->Release();
-    if (FAILED(handler_result) || handler == nullptr) {
-        return false;
-    }
-
-    DWORD type_count = 0;
-    handler->GetMediaTypeCount(&type_count);
-
-    IMFMediaType* fallback = nullptr;
-
-    for (DWORD index = 0; index < type_count; ++index) {
-        IMFMediaType* type = nullptr;
-        if (FAILED(handler->GetMediaTypeByIndex(index, &type)) || type == nullptr) {
-            continue;
-        }
+        if (result == MF_E_NO_MORE_TYPES) break;
+        if (FAILED(result)) return false;
 
         GUID subtype{};
         UINT32 type_width = 0;
@@ -143,114 +117,81 @@ bool configure_native_mode(
         UINT32 fps_den = 1;
 
         const bool matches =
-            SUCCEEDED(type->GetGUID(MF_MT_SUBTYPE, &subtype)) &&
-            SUCCEEDED(MFGetAttributeSize(type, MF_MT_FRAME_SIZE, &type_width, &type_height)) &&
-            SUCCEEDED(MFGetAttributeRatio(type, MF_MT_FRAME_RATE, &fps_num, &fps_den)) &&
-            fps_den != 0 &&
+            SUCCEEDED(media_type->GetGUID(MF_MT_SUBTYPE, &subtype)) &&
+            subtype == MFVideoFormat_NV12 &&
+            SUCCEEDED(MFGetAttributeSize(media_type, MF_MT_FRAME_SIZE, &type_width, &type_height)) &&
             type_width == width &&
             type_height == height &&
+            SUCCEEDED(MFGetAttributeRatio(media_type, MF_MT_FRAME_RATE, &fps_num, &fps_den)) &&
+            fps_den != 0 &&
             fps_num == fps * fps_den;
 
-        if (!matches) {
-            type->Release();
-            continue;
+        if (matches) {
+            const HRESULT set_result = reader->SetCurrentMediaType(
+                kVideoStream,
+                nullptr,
+                media_type
+            );
+            media_type->Release();
+            return SUCCEEDED(set_result);
         }
 
-        if (subtype == MFVideoFormat_MJPG) {
-            const HRESULT result = handler->SetCurrentMediaType(type);
-            type->Release();
-            if (fallback != nullptr) fallback->Release();
-            handler->Release();
-            return SUCCEEDED(result);
-        }
-
-        if (fallback == nullptr && subtype == MFVideoFormat_NV12) {
-            fallback = type;
-        } else {
-            type->Release();
-        }
+        media_type->Release();
     }
 
-    bool configured = false;
-    if (fallback != nullptr) {
-        configured = SUCCEEDED(handler->SetCurrentMediaType(fallback));
-        fallback->Release();
-    }
-
-    handler->Release();
-    return configured;
+    return false;
 }
 
-bool try_set_yuy2_output_type(IMFSourceReader* reader, UINT32 fps) {
-    IMFMediaType* output_type = nullptr;
-    if (FAILED(MFCreateMediaType(&output_type)) || output_type == nullptr) {
-        return false;
-    }
-
-    HRESULT result = output_type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-    if (SUCCEEDED(result)) result = output_type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_YUY2);
-    if (SUCCEEDED(result)) {
-        result = MFSetAttributeSize(
-            output_type,
-            MF_MT_FRAME_SIZE,
-            CaptureSession::kCaptureWidth,
-            CaptureSession::kCaptureHeight
-        );
-    }
-    if (SUCCEEDED(result)) {
-        result = MFSetAttributeRatio(output_type, MF_MT_FRAME_RATE, fps, 1);
-    }
-    if (SUCCEEDED(result)) {
-        result = MFSetAttributeRatio(output_type, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
-    }
-    if (SUCCEEDED(result)) {
-        result = output_type->SetUINT32(
-            MF_MT_INTERLACE_MODE,
-            MFVideoInterlace_Progressive
-        );
-    }
-    if (SUCCEEDED(result)) {
-        result = reader->SetCurrentMediaType(kVideoStream, nullptr, output_type);
-    }
-
-    output_type->Release();
-    return SUCCEEDED(result);
-}
-
-bool copy_sample_to_frame(IMFSample* sample, std::vector<std::uint8_t>& destination) {
+bool copy_nv12_sample(
+    IMFSample* sample,
+    std::vector<std::uint8_t>& destination,
+    std::uint32_t width,
+    std::uint32_t height
+) {
     IMFMediaBuffer* buffer = nullptr;
-    const HRESULT buffer_result = sample->ConvertToContiguousBuffer(&buffer);
-    if (FAILED(buffer_result) || buffer == nullptr) {
+    if (FAILED(sample->ConvertToContiguousBuffer(&buffer)) || buffer == nullptr) {
         return false;
     }
 
+    const std::size_t y_bytes = static_cast<std::size_t>(width) * height;
+    const std::size_t frame_bytes = y_bytes + y_bytes / 2;
     bool copied = false;
 
     IMF2DBuffer* buffer_2d = nullptr;
     if (SUCCEEDED(buffer->QueryInterface(IID_PPV_ARGS(&buffer_2d))) && buffer_2d != nullptr) {
         BYTE* scanline = nullptr;
         LONG pitch = 0;
-        if (SUCCEEDED(buffer_2d->Lock2D(&scanline, &pitch)) && scanline != nullptr) {
-            const std::size_t absolute_pitch =
-                static_cast<std::size_t>(pitch < 0 ? -static_cast<long long>(pitch) : pitch);
 
-            if (absolute_pitch >= kRowBytes) {
-                for (std::uint32_t row = 0; row < CaptureSession::kCaptureHeight; ++row) {
-                    const BYTE* source_row = pitch >= 0
-                        ? scanline + static_cast<std::size_t>(row) * absolute_pitch
-                        : scanline - static_cast<std::size_t>(row) * absolute_pitch;
+        if (SUCCEEDED(buffer_2d->Lock2D(&scanline, &pitch)) &&
+            scanline != nullptr &&
+            pitch >= static_cast<LONG>(width)) {
 
-                    std::memcpy(
-                        destination.data() + static_cast<std::size_t>(row) * kRowBytes,
-                        source_row,
-                        kRowBytes
-                    );
-                }
-                copied = true;
+            destination.resize(frame_bytes);
+            const std::size_t stride = static_cast<std::size_t>(pitch);
+
+            for (std::uint32_t row = 0; row < height; ++row) {
+                std::memcpy(
+                    destination.data() + static_cast<std::size_t>(row) * width,
+                    scanline + static_cast<std::size_t>(row) * stride,
+                    width
+                );
             }
 
+            const BYTE* uv_plane = scanline + static_cast<std::size_t>(height) * stride;
+            std::uint8_t* uv_destination = destination.data() + y_bytes;
+
+            for (std::uint32_t row = 0; row < height / 2; ++row) {
+                std::memcpy(
+                    uv_destination + static_cast<std::size_t>(row) * width,
+                    uv_plane + static_cast<std::size_t>(row) * stride,
+                    width
+                );
+            }
+
+            copied = true;
             buffer_2d->Unlock2D();
         }
+
         buffer_2d->Release();
     }
 
@@ -260,15 +201,16 @@ bool copy_sample_to_frame(IMFSample* sample, std::vector<std::uint8_t>& destinat
         DWORD current_length = 0;
 
         if (SUCCEEDED(buffer->Lock(&data, &max_length, &current_length)) && data != nullptr) {
-            if (current_length >= CaptureSession::kFrameBytes) {
-                std::memcpy(destination.data(), data, CaptureSession::kFrameBytes);
+            if (current_length >= frame_bytes) {
+                destination.resize(frame_bytes);
+                std::memcpy(destination.data(), data, frame_bytes);
                 copied = true;
             } else {
                 static bool warned_short_buffer = false;
                 if (!warned_short_buffer) {
-                    std::cerr << "Capture sample buffer is smaller than expected: "
+                    std::cerr << "NV12 sample is smaller than expected: "
                               << current_length << " bytes, expected at least "
-                              << CaptureSession::kFrameBytes << " bytes.\n";
+                              << frame_bytes << " bytes.\n";
                     warned_short_buffer = true;
                 }
             }
@@ -283,10 +225,10 @@ bool copy_sample_to_frame(IMFSample* sample, std::vector<std::uint8_t>& destinat
 } // namespace
 
 CaptureSession::CaptureMode CaptureSession::choose_capture_mode() {
-    std::cout << "\nXbox capture mode:\n"
+    std::cout << "\nXbox capture mode (native NV12):\n"
               << "  [1] 1280x720 @ 60 fps  - smooth / recommended\n"
-              << "  [2] 1920x1080 @ 50 fps - sharper, high motion\n"
-              << "  [3] 1920x1080 @ 30 fps - sharper, lower frame rate\n"
+              << "  [2] 1920x1080 @ 50 fps - highest-motion 1080p mode\n"
+              << "  [3] 1920x1080 @ 30 fps - 1080p / lower frame rate\n"
               << "Select mode [1]: ";
 
     std::string choice;
@@ -305,13 +247,11 @@ CaptureSession::~CaptureSession() {
 }
 
 void CaptureSession::start() {
-    if (thread_.joinable()) {
-        return;
-    }
+    if (thread_.joinable()) return;
 
     {
         std::scoped_lock lock(frame_mutex_);
-        latest_frame_.resize(kFrameBytes);
+        latest_frame_.resize(frame_bytes());
         latest_frame_sequence_ = 0;
     }
 
@@ -322,10 +262,7 @@ void CaptureSession::start() {
 }
 
 void CaptureSession::stop() {
-    if (!thread_.joinable()) {
-        return;
-    }
-
+    if (!thread_.joinable()) return;
     thread_.request_stop();
     thread_.join();
 }
@@ -338,6 +275,23 @@ bool CaptureSession::running() const noexcept {
     return running_.load(std::memory_order_acquire);
 }
 
+std::uint32_t CaptureSession::capture_width() const noexcept {
+    return mode_.width;
+}
+
+std::uint32_t CaptureSession::capture_height() const noexcept {
+    return mode_.height;
+}
+
+std::uint32_t CaptureSession::capture_fps() const noexcept {
+    return mode_.fps;
+}
+
+std::size_t CaptureSession::frame_bytes() const noexcept {
+    const std::size_t y_bytes = static_cast<std::size_t>(mode_.width) * mode_.height;
+    return y_bytes + y_bytes / 2;
+}
+
 bool CaptureSession::copy_latest_frame(
     std::vector<std::uint8_t>& destination,
     std::uint64_t& sequence
@@ -348,8 +302,7 @@ bool CaptureSession::copy_latest_frame(
         return false;
     }
 
-    destination.resize(kFrameBytes);
-    std::memcpy(destination.data(), latest_frame_.data(), kFrameBytes);
+    destination = latest_frame_;
     sequence = latest_frame_sequence_;
     return true;
 }
@@ -368,20 +321,12 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
     try {
         media_source = create_media_source(device_);
 
-        if (!configure_native_mode(media_source, mode_.width, mode_.height, mode_.fps)) {
-            throw std::runtime_error(
-                "Selected native capture mode is not available on this device"
-            );
-        }
-
         IMFAttributes* reader_attributes = nullptr;
         throw_if_failed(
-            MFCreateAttributes(&reader_attributes, 2),
+            MFCreateAttributes(&reader_attributes, 1),
             "Failed to create source-reader attributes"
         );
-
         reader_attributes->SetUINT32(MF_LOW_LATENCY, TRUE);
-        reader_attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
 
         const HRESULT reader_result = MFCreateSourceReaderFromMediaSource(
             media_source,
@@ -393,16 +338,16 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
 
         log_native_formats(reader);
 
-        if (!try_set_yuy2_output_type(reader, mode_.fps)) {
+        if (!select_native_nv12_mode(reader, mode_.width, mode_.height, mode_.fps)) {
             throw std::runtime_error(
-                "Media Foundation could not convert the selected capture mode to 1920x1080 YUY2"
+                "Selected native NV12 capture mode is not available on this device"
             );
         }
 
         std::wcout << L"Capture started on " << device_.name
-                   << L" from " << mode_.width << L"x" << mode_.height
-                   << L" @ " << mode_.fps
-                   << L" fps, outputting 1920x1080 YUY2 to the renderer.\n";
+                   << L" using native NV12 "
+                   << mode_.width << L"x" << mode_.height
+                   << L" @ " << mode_.fps << L" fps. No YUY2 conversion.\n";
 
         running_.store(true, std::memory_order_release);
 
@@ -425,9 +370,7 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
                 &sample
             );
 
-            if (FAILED(read_result)) {
-                throw_if_failed(read_result, "ReadSample failed");
-            }
+            throw_if_failed(read_result, "ReadSample failed");
 
             if ((flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0) {
                 if (sample != nullptr) sample->Release();
@@ -435,8 +378,8 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
             }
 
             if (sample != nullptr) {
-                std::vector<std::uint8_t> captured_frame(kFrameBytes);
-                if (copy_sample_to_frame(sample, captured_frame)) {
+                std::vector<std::uint8_t> captured_frame;
+                if (copy_nv12_sample(sample, captured_frame, mode_.width, mode_.height)) {
                     {
                         std::scoped_lock lock(frame_mutex_);
                         latest_frame_.swap(captured_frame);
@@ -444,13 +387,14 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
                     }
 
                     if (!reported_first_frame) {
-                        std::cout << "First 1080p YUY2 frame published to renderer ("
-                                  << kFrameBytes << " bytes).\n";
+                        std::cout << "First native NV12 frame published to renderer ("
+                                  << frame_bytes() << " bytes).\n";
                         reported_first_frame = true;
                     }
+
+                    frame_count_.fetch_add(1, std::memory_order_relaxed);
                 }
 
-                frame_count_.fetch_add(1, std::memory_order_relaxed);
                 sample->Release();
             }
 
