@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_executable(ps2-capture-stream
+    src/entry.cpp
     src/main.cpp
     src/audio_passthrough.cpp
     src/capture_devices.cpp
@@ -14,6 +15,12 @@ add_executable(ps2-capture-stream
     src/capture_session.cpp
     src/hud_renderer.cpp
     resources/app.rc
+)
+
+# Keep the existing video application intact, but rename its entry point so
+# entry.cpp can choose between full video+audio capture and audio-only mode.
+set_source_files_properties(src/main.cpp PROPERTIES
+    COMPILE_DEFINITIONS "main=video_main"
 )
 
 target_compile_definitions(ps2-capture-stream PRIVATE
