@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(ps2_capture_stream LANGUAGES CXX RC)
+project(console_video_capture LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_executable(ps2-capture-stream
+add_executable(console-video-capture
     src/entry.cpp
     src/main.cpp
     src/audio_passthrough.cpp
@@ -17,13 +17,13 @@ add_executable(ps2-capture-stream
     resources/app.rc
 )
 
-# Keep the existing video application intact, but rename its entry point so
-# entry.cpp can choose between full video+audio capture and audio-only mode.
+# Keep the video application intact, but rename its entry point so entry.cpp
+# can choose between full video+audio capture and audio-only mode.
 set_source_files_properties(src/main.cpp PROPERTIES
     COMPILE_DEFINITIONS "main=video_main"
 )
 
-target_compile_definitions(ps2-capture-stream PRIVATE
+target_compile_definitions(console-video-capture PRIVATE
     WIN32_LEAN_AND_MEAN
     NOMINMAX
     UNICODE
@@ -31,20 +31,20 @@ target_compile_definitions(ps2-capture-stream PRIVATE
 )
 
 if (MSVC)
-    target_compile_options(ps2-capture-stream PRIVATE
+    target_compile_options(console-video-capture PRIVATE
         /W4
         /permissive-
         $<$<COMPILE_LANGUAGE:CXX>:/FI${CMAKE_CURRENT_SOURCE_DIR}/src/app_icon.h>
     )
 elseif (MINGW)
-    target_compile_options(ps2-capture-stream PRIVATE
+    target_compile_options(console-video-capture PRIVATE
         -Wall
         -Wextra
         -Wpedantic
     )
 endif()
 
-target_link_libraries(ps2-capture-stream PRIVATE
+target_link_libraries(console-video-capture PRIVATE
     avrt
     d3d11
     d3dcompiler
