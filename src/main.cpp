@@ -56,6 +56,11 @@ enum class ScalingFilter : std::uint32_t {
     SharpBilinear = 2,
 };
 
+enum class ChromaFilter : std::uint32_t {
+    Nearest = 0,
+    BilinearCentered = 1,
+};
+
 enum class ColorMatrix : std::uint32_t {
     BT601 = 0,
     BT709 = 1,
@@ -74,7 +79,7 @@ struct alignas(16) ImageSettingsGpu {
     std::uint32_t color_matrix;
     std::uint32_t input_range;
     std::uint32_t filter_mode;
-    float padding;
+    std::uint32_t chroma_filter_mode;
 };
 static_assert(sizeof(ImageSettingsGpu) % 16 == 0);
 
@@ -88,6 +93,7 @@ struct WindowState {
 DisplayMode g_display_mode = DisplayMode::FixedResolution;
 AspectRatioMode g_aspect_ratio_mode = AspectRatioMode::Ratio4x3;
 ScalingFilter g_scaling_filter = ScalingFilter::Bilinear;
+ChromaFilter g_chroma_filter = ChromaFilter::BilinearCentered;
 ColorMatrix g_color_matrix = ColorMatrix::BT709;
 InputRange g_input_range = InputRange::Limited;
 float g_brightness = 0.0f;
@@ -134,7 +140,7 @@ cbuffer ImageSettings : register(b0) {
     uint color_matrix;
     uint input_range;
     uint filter_mode;
-    float padding;
+    uint chroma_filter_mode;
 };
 
 struct PSIn {
@@ -177,6 +183,56 @@ float3 yuv_to_rgb(float y, float u, float v) {
     return rgb;
 }
 
+float2 load_chroma(uint chroma_x, uint chroma_y, uint source_width, uint source_height) {
+    const uint chroma_width = max(source_width / 2, 1);
+    const uint chroma_height = max(source_height / 2, 1);
+    chroma_x = min(chroma_x, chroma_width - 1);
+    chroma_y = min(chroma_y, chroma_height - 1);
+
+    const uint uv_x = chroma_x * 2;
+    const uint uv_y = source_height + chroma_y;
+    const float u = nv12_texture.Load(int3(uv_x, uv_y, 0)) - (128.0 / 255.0);
+    const float v = nv12_texture.Load(int3(uv_x + 1, uv_y, 0)) - (128.0 / 255.0);
+    return float2(u, v);
+}
+
+float2 sample_chroma_nearest(uint source_x, uint source_y, uint source_width, uint source_height) {
+    return load_chroma(source_x / 2, source_y / 2, source_width, source_height);
+}
+
+float2 sample_chroma_bilinear(float2 source_pos, uint source_width, uint source_height) {
+    const uint chroma_width = max(source_width / 2, 1);
+    const uint chroma_height = max(source_height / 2, 1);
+
+    // NV12 has one chroma sample for each 2x2 luma block. Treat each sample as
+    // centered on that block and reconstruct the missing chroma values smoothly
+    // instead of repeating one U/V pair over all four luma pixels.
+    float2 chroma_pos = (source_pos - float2(0.5, 0.5)) * 0.5;
+    chroma_pos = clamp(
+        chroma_pos,
+        float2(0.0, 0.0),
+        float2(chroma_width - 1, chroma_height - 1)
+    );
+
+    const uint x0 = (uint)floor(chroma_pos.x);
+    const uint y0 = (uint)floor(chroma_pos.y);
+    const uint x1 = min(x0 + 1, chroma_width - 1);
+    const uint y1 = min(y0 + 1, chroma_height - 1);
+    const float2 fraction = frac(chroma_pos);
+
+    const float2 top = lerp(
+        load_chroma(x0, y0, source_width, source_height),
+        load_chroma(x1, y0, source_width, source_height),
+        fraction.x
+    );
+    const float2 bottom = lerp(
+        load_chroma(x0, y1, source_width, source_height),
+        load_chroma(x1, y1, source_width, source_height),
+        fraction.x
+    );
+    return lerp(top, bottom, fraction.y);
+}
+
 float3 decode_video(uint source_x, uint source_y) {
     uint source_width = 0;
     uint source_height = 0;
@@ -185,14 +241,12 @@ float3 decode_video(uint source_x, uint source_y) {
     source_x = min(source_x, source_width - 1);
     source_y = min(source_y, source_height - 1);
 
-    float y = nv12_texture.Load(int3(source_x, source_y, 0));
+    const float y = nv12_texture.Load(int3(source_x, source_y, 0));
+    const float2 uv = chroma_filter_mode == 0
+        ? sample_chroma_nearest(source_x, source_y, source_width, source_height)
+        : sample_chroma_bilinear(float2(source_x, source_y), source_width, source_height);
 
-    uint uv_x = min((source_x / 2) * 2, source_width - 2);
-    uint uv_y = source_height + source_y / 2;
-    float u = nv12_texture.Load(int3(uv_x, uv_y, 0)) - (128.0 / 255.0);
-    float v = nv12_texture.Load(int3(uv_x + 1, uv_y, 0)) - (128.0 / 255.0);
-
-    return yuv_to_rgb(y, u, v);
+    return yuv_to_rgb(y, uv.x, uv.y);
 }
 
 float3 sample_bilinear(float2 source_pos, uint source_width, uint source_height) {
@@ -336,6 +390,10 @@ const char* scaling_filter_name() {
     return "Unknown";
 }
 
+const char* chroma_filter_name() {
+    return g_chroma_filter == ChromaFilter::Nearest ? "Nearest" : "Bilinear centered";
+}
+
 const char* color_matrix_name() {
     return g_color_matrix == ColorMatrix::BT601 ? "BT.601" : "BT.709";
 }
@@ -351,6 +409,7 @@ void print_image_settings() {
               << " contrast=" << g_contrast
               << " gamma=" << g_gamma
               << " saturation=" << g_saturation << '\n';
+    std::cout << "Chroma reconstruction: " << chroma_filter_name() << '\n';
 }
 
 void reset_image_settings() {
@@ -360,6 +419,7 @@ void reset_image_settings() {
     g_contrast = 1.0f;
     g_gamma = 1.0f;
     g_saturation = 1.0f;
+    g_chroma_filter = ChromaFilter::BilinearCentered;
     std::cout << "Image settings reset.\n";
     print_image_settings();
 }
@@ -367,6 +427,13 @@ void reset_image_settings() {
 void adjust_setting(float& value, float delta, float minimum, float maximum, const char* name) {
     value = std::clamp(value + delta, minimum, maximum);
     std::cout << name << ": " << value << '\n';
+}
+
+void toggle_chroma_filter() {
+    g_chroma_filter = g_chroma_filter == ChromaFilter::Nearest
+        ? ChromaFilter::BilinearCentered
+        : ChromaFilter::Nearest;
+    std::cout << "Chroma reconstruction: " << chroma_filter_name() << '\n';
 }
 
 void update_hud_text() {
@@ -842,7 +909,7 @@ void update_image_settings_buffer() {
         static_cast<std::uint32_t>(g_color_matrix),
         static_cast<std::uint32_t>(g_input_range),
         static_cast<std::uint32_t>(g_scaling_filter),
-        0.0f
+        static_cast<std::uint32_t>(g_chroma_filter)
     };
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
@@ -935,6 +1002,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
             }
             if (w_param == 'Q') {
                 cycle_scaling_filter();
+                return 0;
+            }
+            if (w_param == 'U') {
+                toggle_chroma_filter();
                 return 0;
             }
             if (w_param == 'C') {
@@ -1067,11 +1138,13 @@ int main() {
         print_image_settings();
         std::cout << "Scaling filter: " << scaling_filter_name()
                   << " (Q cycles Nearest/Bilinear/Sharp bilinear).\n";
+        std::cout << "Chroma reconstruction: " << chroma_filter_name()
+                  << " (U toggles legacy nearest / bilinear centered).\n";
         std::cout << "Default mode: Fixed resolution.\n";
         std::cout << "Aspect ratio: " << aspect_ratio_name() << " (A toggles 4:3/16:9).\n";
         print_selected_resolution();
         std::cout << "Hotkeys: F11 fullscreen, Esc leave fullscreen, R output resolution, A aspect ratio, Q scaling filter.\n";
-        std::cout << "          C BT.601/BT.709, L Limited/Full range, 0 reset image settings.\n";
+        std::cout << "          U chroma reconstruction, C BT.601/BT.709, L Limited/Full range, 0 reset image settings.\n";
         std::cout << "          B brightness, K contrast, G gamma, S saturation; hold Shift to decrease.\n";
         std::cout << "          M cycle display modes, 1 Fit aspect ratio, 2 Fixed resolution, 3 Stretch.\n";
         std::cout << "Close the window to exit.\n";
