@@ -56,11 +56,6 @@ enum class ScalingFilter : std::uint32_t {
     SharpBilinear = 2,
 };
 
-enum class ChromaFilter : std::uint32_t {
-    Nearest = 0,
-    BilinearCentered = 1,
-};
-
 enum class ColorMatrix : std::uint32_t {
     BT601 = 0,
     BT709 = 1,
@@ -71,6 +66,11 @@ enum class InputRange : std::uint32_t {
     Full = 1,
 };
 
+enum class ChromaFilter : std::uint32_t {
+    Nearest = 0,
+    BilinearCentered = 1,
+};
+
 struct alignas(16) ImageSettingsGpu {
     float brightness;
     float contrast;
@@ -79,7 +79,7 @@ struct alignas(16) ImageSettingsGpu {
     std::uint32_t color_matrix;
     std::uint32_t input_range;
     std::uint32_t filter_mode;
-    std::uint32_t chroma_filter_mode;
+    std::uint32_t chroma_filter;
 };
 static_assert(sizeof(ImageSettingsGpu) % 16 == 0);
 
@@ -140,7 +140,7 @@ cbuffer ImageSettings : register(b0) {
     uint color_matrix;
     uint input_range;
     uint filter_mode;
-    uint chroma_filter_mode;
+    uint chroma_filter;
 };
 
 struct PSIn {
@@ -183,54 +183,39 @@ float3 yuv_to_rgb(float y, float u, float v) {
     return rgb;
 }
 
-float2 load_chroma(uint chroma_x, uint chroma_y, uint source_width, uint source_height) {
-    const uint chroma_width = max(source_width / 2, 1);
-    const uint chroma_height = max(source_height / 2, 1);
-    chroma_x = min(chroma_x, chroma_width - 1);
-    chroma_y = min(chroma_y, chroma_height - 1);
-
-    const uint uv_x = chroma_x * 2;
-    const uint uv_y = source_height + chroma_y;
-    const float u = nv12_texture.Load(int3(uv_x, uv_y, 0)) - (128.0 / 255.0);
-    const float v = nv12_texture.Load(int3(uv_x + 1, uv_y, 0)) - (128.0 / 255.0);
-    return float2(u, v);
+float2 load_chroma_nearest(uint source_x, uint source_y, uint source_width, uint source_height) {
+    uint uv_x = min((source_x / 2) * 2, source_width - 2);
+    uint uv_y = source_height + source_y / 2;
+    return float2(
+        nv12_texture.Load(int3(uv_x, uv_y, 0)),
+        nv12_texture.Load(int3(uv_x + 1, uv_y, 0))
+    );
 }
 
-float2 sample_chroma_nearest(uint source_x, uint source_y, uint source_width, uint source_height) {
-    return load_chroma(source_x / 2, source_y / 2, source_width, source_height);
+float2 load_chroma_sample(int cx, int cy, uint source_width, uint source_height) {
+    const int chroma_width = int(source_width / 2);
+    const int chroma_height = int(source_height / 2);
+    cx = clamp(cx, 0, chroma_width - 1);
+    cy = clamp(cy, 0, chroma_height - 1);
+    const uint uv_x = uint(cx * 2);
+    const uint uv_y = source_height + uint(cy);
+    return float2(
+        nv12_texture.Load(int3(uv_x, uv_y, 0)),
+        nv12_texture.Load(int3(uv_x + 1, uv_y, 0))
+    );
 }
 
-float2 sample_chroma_bilinear(float2 source_pos, uint source_width, uint source_height) {
-    const uint chroma_width = max(source_width / 2, 1);
-    const uint chroma_height = max(source_height / 2, 1);
+float2 load_chroma_bilinear_centered(uint source_x, uint source_y, uint source_width, uint source_height) {
+    float2 chroma_pos = (float2(source_x, source_y) - 0.5) * 0.5;
+    int2 p0 = int2(floor(chroma_pos));
+    float2 f = frac(chroma_pos);
 
-    // NV12 has one chroma sample for each 2x2 luma block. Treat each sample as
-    // centered on that block and reconstruct the missing chroma values smoothly
-    // instead of repeating one U/V pair over all four luma pixels.
-    float2 chroma_pos = (source_pos - float2(0.5, 0.5)) * 0.5;
-    chroma_pos = clamp(
-        chroma_pos,
-        float2(0.0, 0.0),
-        float2(chroma_width - 1, chroma_height - 1)
-    );
+    float2 c00 = load_chroma_sample(p0.x,     p0.y,     source_width, source_height);
+    float2 c10 = load_chroma_sample(p0.x + 1, p0.y,     source_width, source_height);
+    float2 c01 = load_chroma_sample(p0.x,     p0.y + 1, source_width, source_height);
+    float2 c11 = load_chroma_sample(p0.x + 1, p0.y + 1, source_width, source_height);
 
-    const uint x0 = (uint)floor(chroma_pos.x);
-    const uint y0 = (uint)floor(chroma_pos.y);
-    const uint x1 = min(x0 + 1, chroma_width - 1);
-    const uint y1 = min(y0 + 1, chroma_height - 1);
-    const float2 fraction = frac(chroma_pos);
-
-    const float2 top = lerp(
-        load_chroma(x0, y0, source_width, source_height),
-        load_chroma(x1, y0, source_width, source_height),
-        fraction.x
-    );
-    const float2 bottom = lerp(
-        load_chroma(x0, y1, source_width, source_height),
-        load_chroma(x1, y1, source_width, source_height),
-        fraction.x
-    );
-    return lerp(top, bottom, fraction.y);
+    return lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y);
 }
 
 float3 decode_video(uint source_x, uint source_y) {
@@ -241,12 +226,14 @@ float3 decode_video(uint source_x, uint source_y) {
     source_x = min(source_x, source_width - 1);
     source_y = min(source_y, source_height - 1);
 
-    const float y = nv12_texture.Load(int3(source_x, source_y, 0));
-    const float2 uv = chroma_filter_mode == 0
-        ? sample_chroma_nearest(source_x, source_y, source_width, source_height)
-        : sample_chroma_bilinear(float2(source_x, source_y), source_width, source_height);
+    float y = nv12_texture.Load(int3(source_x, source_y, 0));
+    float2 uv = chroma_filter == 0
+        ? load_chroma_nearest(source_x, source_y, source_width, source_height)
+        : load_chroma_bilinear_centered(source_x, source_y, source_width, source_height);
 
-    return yuv_to_rgb(y, uv.x, uv.y);
+    float u = uv.x - (128.0 / 255.0);
+    float v = uv.y - (128.0 / 255.0);
+    return yuv_to_rgb(y, u, v);
 }
 
 float3 sample_bilinear(float2 source_pos, uint source_width, uint source_height) {
@@ -415,11 +402,11 @@ void print_image_settings() {
 void reset_image_settings() {
     g_color_matrix = ColorMatrix::BT709;
     g_input_range = InputRange::Limited;
+    g_chroma_filter = ChromaFilter::BilinearCentered;
     g_brightness = 0.0f;
     g_contrast = 1.0f;
     g_gamma = 1.0f;
     g_saturation = 1.0f;
-    g_chroma_filter = ChromaFilter::BilinearCentered;
     std::cout << "Image settings reset.\n";
     print_image_settings();
 }
@@ -427,13 +414,6 @@ void reset_image_settings() {
 void adjust_setting(float& value, float delta, float minimum, float maximum, const char* name) {
     value = std::clamp(value + delta, minimum, maximum);
     std::cout << name << ": " << value << '\n';
-}
-
-void toggle_chroma_filter() {
-    g_chroma_filter = g_chroma_filter == ChromaFilter::Nearest
-        ? ChromaFilter::BilinearCentered
-        : ChromaFilter::Nearest;
-    std::cout << "Chroma reconstruction: " << chroma_filter_name() << '\n';
 }
 
 void update_hud_text() {
@@ -491,6 +471,13 @@ void cycle_scaling_filter() {
         break;
     }
     std::cout << "Scaling filter: " << scaling_filter_name() << '\n';
+}
+
+void toggle_chroma_filter() {
+    g_chroma_filter = g_chroma_filter == ChromaFilter::Nearest
+        ? ChromaFilter::BilinearCentered
+        : ChromaFilter::Nearest;
+    std::cout << "Chroma reconstruction: " << chroma_filter_name() << '\n';
 }
 
 void toggle_color_matrix() {
@@ -1132,9 +1119,9 @@ int main() {
         HWND window = create_window(instance);
         initialize_d3d(window, capture);
 
-        std::cout << "Native NV12 renderer active: no YUY2 conversion.\n";
+        std::cout << "NV12 renderer active.\n";
         std::cout << "Capture mode: " << capture.capture_width() << 'x' << capture.capture_height()
-                  << " @ " << capture.capture_fps() << " fps NV12.\n";
+                  << " @ " << capture.capture_fps() << " fps, source=" << capture.source_format_name() << ".\n";
         print_image_settings();
         std::cout << "Scaling filter: " << scaling_filter_name()
                   << " (Q cycles Nearest/Bilinear/Sharp bilinear).\n";
