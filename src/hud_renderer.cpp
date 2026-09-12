@@ -13,7 +13,7 @@
 namespace {
 
 constexpr UINT kHudWidth = 590;
-constexpr UINT kHudHeight = 330;
+constexpr UINT kHudHeight = 390;
 constexpr UINT kHudX = 10;
 constexpr UINT kHudY = 10;
 constexpr UINT kGlyphWidth = 5;
@@ -169,6 +169,7 @@ std::string build_help_text(const std::string& status_text) {
         "R    CYCLE OUTPUT SIZE\n"
         "A    TOGGLE ASPECT 4:3 / 16:9\n"
         "Q    CYCLE SCALE FILTER\n"
+        "U    CYCLE CHROMA RECONSTRUCTION\n"
         "C    BT.601 / BT.709\n"
         "L    LIMITED / FULL RANGE\n"
         "B    BRIGHTNESS   SHIFT+B DECREASE\n"
@@ -180,9 +181,9 @@ std::string build_help_text(const std::string& status_text) {
         "1    FIT ASPECT RATIO\n"
         "2    FIXED RESOLUTION\n"
         "3    STRETCH\n"
-        "H    CLOSE HELP\n"
+        "H    TOGGLE HELP\n"
         "\n"
-        "CAPTURE SIGNAL IS SELECTED AT STARTUP";
+        "CAPTURE MODE IS SELECTED AT STARTUP";
 }
 
 void draw_background(std::vector<unsigned char>& pixels, UINT width, UINT height, unsigned char alpha) {
@@ -223,7 +224,7 @@ void HudRenderer::set_text(std::string text){ if(text_==text)return; text_=std::
 void HudRenderer::update_texture(ID3D11DeviceContext* context){
     std::fill(pixels_.begin(),pixels_.end(),static_cast<unsigned char>(0));
     const std::string display_text=help_visible_?build_help_text(text_):text_+"  H HELP";
-    if(help_visible_) draw_background(pixels_,570,325,205); else { const UINT w=std::min(kHudWidth,kTextOriginX*2+static_cast<UINT>(display_text.size())*kGlyphAdvance); draw_background(pixels_,w,28,140); }
+    if(help_visible_) draw_background(pixels_,570,385,205); else { const UINT w=std::min(kHudWidth,kTextOriginX*2+static_cast<UINT>(display_text.size())*kGlyphAdvance); draw_background(pixels_,w,28,140); }
     UINT cx=kTextOriginX, cy=kTextOriginY;
     for(char ch:display_text){
         if(ch=='\n'){cx=kTextOriginX;cy+=kLineAdvance;if(cy+kGlyphHeight*kGlyphScale>=kHudHeight)break;continue;}
