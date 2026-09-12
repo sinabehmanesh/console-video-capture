@@ -26,7 +26,7 @@ int run_audio_only_mode() {
 } // namespace
 
 int main() {
-    std::cout << "PS2/Xbox capture mode:\n"
+    std::cout << "Console video capture mode:\n"
               << "  [1] Video + audio capture - render USB video and pass capture-card audio\n"
               << "  [2] Audio passthrough only - use HDMI passthrough for video, Windows for audio\n"
               << "Select mode [1]: ";
