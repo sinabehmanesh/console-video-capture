@@ -180,6 +180,7 @@ std::string build_help_text(const std::string& status_text) {
         "F11  FULLSCREEN\n"
         "ESC  LEAVE FULLSCREEN\n"
         "R    CYCLE OUTPUT SIZE\n"
+        "A    TOGGLE ASPECT 4:3 / 16:9\n"
         "Q    CYCLE SCALE FILTER\n"
         "C    BT.601 / BT.709\n"
         "L    LIMITED / FULL RANGE\n"
@@ -189,7 +190,7 @@ std::string build_help_text(const std::string& status_text) {
         "S    SATURATION   SHIFT+S DECREASE\n"
         "0    RESET IMAGE SETTINGS\n"
         "M    CYCLE DISPLAY MODE\n"
-        "1    FIT 4:3\n"
+        "1    FIT ASPECT RATIO\n"
         "2    FIXED RESOLUTION\n"
         "3    STRETCH\n"
         "H    CLOSE HELP";
