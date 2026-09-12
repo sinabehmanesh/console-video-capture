@@ -56,47 +56,6 @@ IMFMediaSource* create_media_source(const CaptureDeviceInfo& device) {
     return media_source;
 }
 
-const wchar_t* subtype_name(const GUID& subtype) {
-    if (subtype == MFVideoFormat_NV12) return L"NV12";
-    if (subtype == MFVideoFormat_MJPG) return L"MJPG";
-    if (subtype == MFVideoFormat_YUY2) return L"YUY2";
-    if (subtype == MFVideoFormat_RGB32) return L"RGB32";
-    if (subtype == MFVideoFormat_H264) return L"H264";
-    return L"other";
-}
-
-void log_native_formats(IMFSourceReader* reader) {
-    std::wcout << L"Native capture formats:\n";
-
-    for (DWORD index = 0;; ++index) {
-        IMFMediaType* media_type = nullptr;
-        const HRESULT result = reader->GetNativeMediaType(kVideoStream, index, &media_type);
-
-        if (result == MF_E_NO_MORE_TYPES) break;
-        if (FAILED(result)) break;
-
-        GUID subtype{};
-        UINT32 width = 0;
-        UINT32 height = 0;
-        UINT32 fps_num = 0;
-        UINT32 fps_den = 1;
-
-        media_type->GetGUID(MF_MT_SUBTYPE, &subtype);
-        MFGetAttributeSize(media_type, MF_MT_FRAME_SIZE, &width, &height);
-        MFGetAttributeRatio(media_type, MF_MT_FRAME_RATE, &fps_num, &fps_den);
-
-        const double fps = fps_den == 0
-            ? 0.0
-            : static_cast<double>(fps_num) / static_cast<double>(fps_den);
-
-        std::wcout << L"  [" << index << L"] "
-                   << width << L"x" << height << L" @ " << fps
-                   << L" " << subtype_name(subtype) << L'\n';
-
-        media_type->Release();
-    }
-}
-
 bool select_native_mode(
     IMFSourceReader* reader,
     const GUID& wanted_subtype,
@@ -252,21 +211,21 @@ bool copy_nv12_sample(
 
 CaptureSession::CaptureMode CaptureSession::choose_capture_mode() {
     std::cout << "\nXbox capture mode:\n"
-              << "  [1] 1280x720 @ 60 fps  NV12 native\n"
-              << "  [2] 1920x1080 @ 50 fps NV12 native\n"
-              << "  [3] 1920x1080 @ 30 fps NV12 native\n"
-              << "  [4] 1920x1080 @ 50 fps MJPEG -> NV12 (diagnostic)\n"
-              << "  [5] 1920x1080 @ 30 fps MJPEG -> NV12 (diagnostic)\n"
-              << "Select mode [1]: ";
+              << "  [1] 1280x720 @ 60 fps  NV12  - smoothest motion; lower image detail\n"
+              << "  [2] 1920x1080 @ 50 fps NV12  - best 1080p motion; recommended 1080p mode\n"
+              << "  [3] 1920x1080 @ 30 fps NV12  - full 1080p detail; lower frame rate\n"
+              << "  [4] 1920x1080 @ 50 fps MJPEG - alternate USB path; decoded to NV12\n"
+              << "  [5] 1920x1080 @ 30 fps MJPEG - alternate USB path; decoded to NV12\n"
+              << "Select mode [2]: ";
 
     std::string choice;
     std::getline(std::cin, choice);
 
-    if (choice == "2") return {1920, 1080, 50, CaptureSource::NativeNV12};
+    if (choice == "1") return {1280, 720, 60, CaptureSource::NativeNV12};
     if (choice == "3") return {1920, 1080, 30, CaptureSource::NativeNV12};
     if (choice == "4") return {1920, 1080, 50, CaptureSource::NativeMJPGToNV12};
     if (choice == "5") return {1920, 1080, 30, CaptureSource::NativeMJPGToNV12};
-    return {1280, 720, 60, CaptureSource::NativeNV12};
+    return {1920, 1080, 50, CaptureSource::NativeNV12};
 }
 
 CaptureSession::CaptureSession(CaptureDeviceInfo device)
@@ -372,8 +331,6 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
         );
         reader_attributes->Release();
         throw_if_failed(reader_result, "Failed to create capture source reader");
-
-        log_native_formats(reader);
 
         if (mode_.source == CaptureSource::NativeNV12) {
             if (!select_native_mode(reader, MFVideoFormat_NV12, mode_.width, mode_.height, mode_.fps)) {
