@@ -10,12 +10,11 @@
 
 class CaptureSession {
 public:
-    // Prefer a 720p60 capture path for HDMI sources such as Xbox 360. The
-    // Media Foundation source reader is allowed to decode/convert compressed
-    // native formats (for example MJPEG) into YUY2 before frames reach the
-    // renderer. 1280x720 also scales cleanly to a 2560x1440 display.
-    static constexpr std::uint32_t kCaptureWidth = 1280;
-    static constexpr std::uint32_t kCaptureHeight = 720;
+    // Renderer-side frame size. Xbox capture profiles can use either a native
+    // 720p60 source or a native 1080p source; Media Foundation normalizes the
+    // frames to 1080p YUY2 before they reach the renderer.
+    static constexpr std::uint32_t kCaptureWidth = 1920;
+    static constexpr std::uint32_t kCaptureHeight = 1080;
     static constexpr std::uint32_t kBytesPerPixel = 2;
     static constexpr std::size_t kFrameBytes =
         static_cast<std::size_t>(kCaptureWidth) *
@@ -40,9 +39,17 @@ public:
     ) const;
 
 private:
+    struct CaptureMode {
+        std::uint32_t width;
+        std::uint32_t height;
+        std::uint32_t fps;
+    };
+
+    static CaptureMode choose_capture_mode();
     void capture_loop(std::stop_token stop_token);
 
     CaptureDeviceInfo device_;
+    CaptureMode mode_;
     std::jthread thread_;
     std::atomic<std::uint64_t> frame_count_{0};
     std::atomic<bool> running_{false};
