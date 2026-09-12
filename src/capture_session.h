@@ -27,6 +27,7 @@ public:
     [[nodiscard]] std::uint32_t capture_height() const noexcept;
     [[nodiscard]] std::uint32_t capture_fps() const noexcept;
     [[nodiscard]] std::size_t frame_bytes() const noexcept;
+    [[nodiscard]] const char* source_format_name() const noexcept;
 
     [[nodiscard]] bool copy_latest_frame(
         std::vector<std::uint8_t>& destination,
@@ -34,10 +35,16 @@ public:
     ) const;
 
 private:
+    enum class CaptureSource {
+        NativeNV12,
+        NativeMJPGToNV12,
+    };
+
     struct CaptureMode {
         std::uint32_t width;
         std::uint32_t height;
         std::uint32_t fps;
+        CaptureSource source;
     };
 
     static CaptureMode choose_capture_mode();
