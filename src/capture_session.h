@@ -10,10 +10,12 @@
 
 class CaptureSession {
 public:
-    // Use a USB2-safe uncompressed mode for the PS2 path. 720x480 YUY2 at 60 Hz
-    // fits within practical USB2 bandwidth and matches the PS2-era source well.
-    static constexpr std::uint32_t kCaptureWidth = 720;
-    static constexpr std::uint32_t kCaptureHeight = 480;
+    // Prefer a 720p60 capture path for HDMI sources such as Xbox 360. The
+    // Media Foundation source reader is allowed to decode/convert compressed
+    // native formats (for example MJPEG) into YUY2 before frames reach the
+    // renderer. 1280x720 also scales cleanly to a 2560x1440 display.
+    static constexpr std::uint32_t kCaptureWidth = 1280;
+    static constexpr std::uint32_t kCaptureHeight = 720;
     static constexpr std::uint32_t kBytesPerPixel = 2;
     static constexpr std::size_t kFrameBytes =
         static_cast<std::size_t>(kCaptureWidth) *
