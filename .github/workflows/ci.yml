@@ -43,7 +43,7 @@ jobs:
       - name: Verify executable
         shell: pwsh
         run: |
-          $exe = "build/Release/ps2-capture-stream.exe"
+          $exe = "build/Release/console-video-capture.exe"
           if (-not (Test-Path $exe)) {
             throw "Expected executable was not produced: $exe"
           }
