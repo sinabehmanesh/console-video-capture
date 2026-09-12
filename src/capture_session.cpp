@@ -210,7 +210,7 @@ bool copy_nv12_sample(
 } // namespace
 
 CaptureSession::CaptureMode CaptureSession::choose_capture_mode() {
-    std::cout << "\nXbox capture mode:\n"
+    std::cout << "\nVideo capture mode:\n"
               << "  [1] 1280x720 @ 60 fps  NV12  - smoothest motion; lower image detail\n"
               << "  [2] 1920x1080 @ 50 fps NV12  - best 1080p motion; recommended 1080p mode\n"
               << "  [3] 1920x1080 @ 30 fps NV12  - full 1080p detail; lower frame rate\n"
