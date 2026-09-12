@@ -7,6 +7,7 @@
 #include <mfreadwrite.h>
 #include <objbase.h>
 
+#include <array>
 #include <chrono>
 #include <cstring>
 #include <iostream>
@@ -58,21 +59,24 @@ IMFMediaSource* create_media_source(const CaptureDeviceInfo& device) {
     return media_source;
 }
 
-IMFMediaType* find_yuy2_capture_type(IMFSourceReader* reader, UINT32& selected_fps) {
-    IMFMediaType* fifty_hz_fallback = nullptr;
+const wchar_t* subtype_name(const GUID& subtype) {
+    if (subtype == MFVideoFormat_YUY2) return L"YUY2";
+    if (subtype == MFVideoFormat_MJPG) return L"MJPG";
+    if (subtype == MFVideoFormat_NV12) return L"NV12";
+    if (subtype == MFVideoFormat_RGB32) return L"RGB32";
+    if (subtype == MFVideoFormat_H264) return L"H264";
+    return L"other";
+}
+
+void log_native_formats(IMFSourceReader* reader) {
+    std::wcout << L"Native capture formats:\n";
 
     for (DWORD index = 0;; ++index) {
         IMFMediaType* media_type = nullptr;
-        const HRESULT result = reader->GetNativeMediaType(
-            kVideoStream,
-            index,
-            &media_type
-        );
+        const HRESULT result = reader->GetNativeMediaType(kVideoStream, index, &media_type);
 
-        if (result == MF_E_NO_MORE_TYPES) {
-            break;
-        }
-        throw_if_failed(result, "Failed to inspect capture media type");
+        if (result == MF_E_NO_MORE_TYPES) break;
+        if (FAILED(result)) break;
 
         GUID subtype{};
         UINT32 width = 0;
@@ -80,39 +84,70 @@ IMFMediaType* find_yuy2_capture_type(IMFSourceReader* reader, UINT32& selected_f
         UINT32 fps_num = 0;
         UINT32 fps_den = 1;
 
-        const bool dimensions_match =
-            SUCCEEDED(media_type->GetGUID(MF_MT_SUBTYPE, &subtype)) &&
-            subtype == MFVideoFormat_YUY2 &&
-            SUCCEEDED(MFGetAttributeSize(media_type, MF_MT_FRAME_SIZE, &width, &height)) &&
-            width == CaptureSession::kCaptureWidth &&
-            height == CaptureSession::kCaptureHeight &&
-            SUCCEEDED(MFGetAttributeRatio(media_type, MF_MT_FRAME_RATE, &fps_num, &fps_den)) &&
-            fps_den != 0;
+        media_type->GetGUID(MF_MT_SUBTYPE, &subtype);
+        MFGetAttributeSize(media_type, MF_MT_FRAME_SIZE, &width, &height);
+        MFGetAttributeRatio(media_type, MF_MT_FRAME_RATE, &fps_num, &fps_den);
 
-        if (dimensions_match) {
-            if (fps_num == 60 * fps_den) {
-                if (fifty_hz_fallback != nullptr) {
-                    fifty_hz_fallback->Release();
-                }
-                selected_fps = 60;
-                return media_type;
-            }
+        const double fps = fps_den == 0
+            ? 0.0
+            : static_cast<double>(fps_num) / static_cast<double>(fps_den);
 
-            if (fps_num == 50 * fps_den && fifty_hz_fallback == nullptr) {
-                fifty_hz_fallback = media_type;
-                continue;
-            }
-        }
+        std::wcout << L"  [" << index << L"] "
+                   << width << L"x" << height << L" @ " << fps
+                   << L" " << subtype_name(subtype) << L'\n';
 
         media_type->Release();
     }
+}
 
-    if (fifty_hz_fallback != nullptr) {
-        selected_fps = 50;
-        return fifty_hz_fallback;
+bool try_set_yuy2_output_type(IMFSourceReader* reader, UINT32 fps) {
+    IMFMediaType* output_type = nullptr;
+    if (FAILED(MFCreateMediaType(&output_type)) || output_type == nullptr) {
+        return false;
     }
 
-    return nullptr;
+    HRESULT result = output_type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    if (SUCCEEDED(result)) result = output_type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_YUY2);
+    if (SUCCEEDED(result)) {
+        result = MFSetAttributeSize(
+            output_type,
+            MF_MT_FRAME_SIZE,
+            CaptureSession::kCaptureWidth,
+            CaptureSession::kCaptureHeight
+        );
+    }
+    if (SUCCEEDED(result)) {
+        result = MFSetAttributeRatio(output_type, MF_MT_FRAME_RATE, fps, 1);
+    }
+    if (SUCCEEDED(result)) {
+        result = MFSetAttributeRatio(output_type, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
+    }
+    if (SUCCEEDED(result)) {
+        result = output_type->SetUINT32(
+            MF_MT_INTERLACE_MODE,
+            MFVideoInterlace_Progressive
+        );
+    }
+    if (SUCCEEDED(result)) {
+        result = reader->SetCurrentMediaType(kVideoStream, nullptr, output_type);
+    }
+
+    output_type->Release();
+    return SUCCEEDED(result);
+}
+
+UINT32 select_hd_output_type(IMFSourceReader* reader) {
+    // 60 fps is ideal for Xbox 360. If the card/decoder stack cannot provide
+    // it, keep the HD resolution and fall back to common lower frame rates.
+    constexpr std::array<UINT32, 3> kPreferredFps{{60, 30, 50}};
+
+    for (const UINT32 fps : kPreferredFps) {
+        if (try_set_yuy2_output_type(reader, fps)) {
+            return fps;
+        }
+    }
+
+    return 0;
 }
 
 bool copy_sample_to_frame(IMFSample* sample, std::vector<std::uint8_t>& destination) {
@@ -253,11 +288,12 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
 
         IMFAttributes* reader_attributes = nullptr;
         throw_if_failed(
-            MFCreateAttributes(&reader_attributes, 1),
+            MFCreateAttributes(&reader_attributes, 2),
             "Failed to create source-reader attributes"
         );
 
         reader_attributes->SetUINT32(MF_LOW_LATENCY, TRUE);
+        reader_attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
 
         const HRESULT reader_result = MFCreateSourceReaderFromMediaSource(
             media_source,
@@ -267,22 +303,19 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
         reader_attributes->Release();
         throw_if_failed(reader_result, "Failed to create capture source reader");
 
-        UINT32 selected_fps = 0;
-        IMFMediaType* selected_type = find_yuy2_capture_type(reader, selected_fps);
-        if (selected_type == nullptr) {
-            throw std::runtime_error("Capture device does not expose 720x480 YUY2 at 60 or 50 fps");
+        log_native_formats(reader);
+
+        const UINT32 selected_fps = select_hd_output_type(reader);
+        if (selected_fps == 0) {
+            throw std::runtime_error(
+                "Capture device/Media Foundation cannot provide 1280x720 YUY2. "
+                "Check the native format list above; HD capture usually requires an MJPEG native mode."
+            );
         }
 
-        const HRESULT set_type_result = reader->SetCurrentMediaType(
-            kVideoStream,
-            nullptr,
-            selected_type
-        );
-        selected_type->Release();
-        throw_if_failed(set_type_result, "Failed to select 720x480 YUY2 capture mode");
-
         std::wcout << L"Capture started on " << device_.name
-                   << L" using 720x480 @ " << selected_fps << L" fps YUY2.\n";
+                   << L" using 1280x720 @ " << selected_fps
+                   << L" fps YUY2 (Media Foundation conversion enabled).\n";
 
         running_.store(true, std::memory_order_release);
 
@@ -326,7 +359,7 @@ void CaptureSession::capture_loop(std::stop_token stop_token) {
                     }
 
                     if (!reported_first_frame) {
-                        std::cout << "First YUY2 frame published to renderer ("
+                        std::cout << "First HD YUY2 frame published to renderer ("
                                   << kFrameBytes << " bytes).\n";
                         reported_first_frame = true;
                     }
