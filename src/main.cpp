@@ -25,7 +25,6 @@ namespace {
 constexpr wchar_t kWindowClassName[] = L"PS2CaptureStreamWindowClass";
 constexpr wchar_t kWindowTitle[] = L"PS2 Capture Stream - Stage 10";
 constexpr wchar_t kCaptureHardwareId[] = L"vid_345f&pid_2131";
-constexpr float kDisplayAspect = 4.0f / 3.0f;
 
 struct OutputResolution {
     UINT width;
@@ -40,9 +39,14 @@ constexpr std::array<OutputResolution, 4> kOutputResolutions{{
 }};
 
 enum class DisplayMode {
-    Fit4x3,
+    FitAspectRatio,
     FixedResolution,
     Stretch,
+};
+
+enum class AspectRatioMode {
+    Ratio4x3,
+    Ratio16x9,
 };
 
 enum class ScalingFilter {
@@ -80,6 +84,7 @@ struct WindowState {
 };
 
 DisplayMode g_display_mode = DisplayMode::FixedResolution;
+AspectRatioMode g_aspect_ratio_mode = AspectRatioMode::Ratio4x3;
 ScalingFilter g_scaling_filter = ScalingFilter::Bilinear;
 ColorMatrix g_color_matrix = ColorMatrix::BT709;
 InputRange g_input_range = InputRange::Full;
@@ -436,6 +441,14 @@ const OutputResolution& selected_output_resolution() {
     return kOutputResolutions[g_output_resolution_index];
 }
 
+float selected_display_aspect() {
+    return g_aspect_ratio_mode == AspectRatioMode::Ratio16x9 ? 16.0f / 9.0f : 4.0f / 3.0f;
+}
+
+const char* aspect_ratio_name() {
+    return g_aspect_ratio_mode == AspectRatioMode::Ratio16x9 ? "16:9" : "4:3";
+}
+
 const char* scaling_filter_name() {
     switch (g_scaling_filter) {
     case ScalingFilter::Nearest: return "Nearest";
@@ -482,6 +495,7 @@ void update_hud_text() {
     const auto& resolution = selected_output_resolution();
     const std::string text =
         std::to_string(resolution.width) + "x" + std::to_string(resolution.height) +
+        "  " + aspect_ratio_name() +
         "  " + std::to_string(g_hud_fps) + " FPS";
     g_hud_renderer.set_text(text);
 }
@@ -507,7 +521,7 @@ void update_hud_fps(CaptureSession& capture) {
 
 const char* display_mode_name(DisplayMode mode) {
     switch (mode) {
-    case DisplayMode::Fit4x3: return "Fit 4:3";
+    case DisplayMode::FitAspectRatio: return "Fit aspect ratio";
     case DisplayMode::FixedResolution: return "Fixed resolution";
     case DisplayMode::Stretch: return "Stretch";
     }
@@ -544,16 +558,24 @@ void toggle_input_range() {
     std::cout << "Input range: " << input_range_name() << '\n';
 }
 
+void toggle_aspect_ratio() {
+    g_aspect_ratio_mode = g_aspect_ratio_mode == AspectRatioMode::Ratio4x3
+        ? AspectRatioMode::Ratio16x9
+        : AspectRatioMode::Ratio4x3;
+    std::cout << "Aspect ratio: " << aspect_ratio_name() << '\n';
+    update_hud_text();
+}
+
 void cycle_display_mode() {
     switch (g_display_mode) {
-    case DisplayMode::Fit4x3:
+    case DisplayMode::FitAspectRatio:
         g_display_mode = DisplayMode::FixedResolution;
         break;
     case DisplayMode::FixedResolution:
         g_display_mode = DisplayMode::Stretch;
         break;
     case DisplayMode::Stretch:
-        g_display_mode = DisplayMode::Fit4x3;
+        g_display_mode = DisplayMode::FitAspectRatio;
         break;
     }
     std::cout << "Display mode: " << display_mode_name(g_display_mode) << '\n';
@@ -684,19 +706,23 @@ D3D11_VIEWPORT calculate_video_viewport() {
         return viewport;
     }
 
-    float width = client_width;
-    float height = client_height;
+    float bounds_width = client_width;
+    float bounds_height = client_height;
 
     if (g_display_mode == DisplayMode::FixedResolution) {
         const auto& resolution = selected_output_resolution();
-        width = static_cast<float>(resolution.width);
-        height = static_cast<float>(resolution.height);
-    } else if (client_width / client_height > kDisplayAspect) {
-        height = client_height;
-        width = height * kDisplayAspect;
+        bounds_width = std::min(client_width, static_cast<float>(resolution.width));
+        bounds_height = std::min(client_height, static_cast<float>(resolution.height));
+    }
+
+    const float display_aspect = selected_display_aspect();
+    float width = bounds_width;
+    float height = bounds_height;
+
+    if (bounds_width / bounds_height > display_aspect) {
+        width = bounds_height * display_aspect;
     } else {
-        width = client_width;
-        height = width / kDisplayAspect;
+        height = bounds_width / display_aspect;
     }
 
     viewport.TopLeftX = std::max(0.0f, (client_width - width) * 0.5f);
@@ -1076,6 +1102,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
                 cycle_output_resolution(window);
                 return 0;
             }
+            if (w_param == 'A') {
+                toggle_aspect_ratio();
+                return 0;
+            }
             if (w_param == 'Q') {
                 cycle_scaling_filter();
                 return 0;
@@ -1113,8 +1143,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
                 return 0;
             }
             if (w_param == '1') {
-                g_display_mode = DisplayMode::Fit4x3;
-                std::cout << "Display mode: Fit 4:3\n";
+                g_display_mode = DisplayMode::FitAspectRatio;
+                std::cout << "Display mode: Fit aspect ratio\n";
                 return 0;
             }
             if (w_param == '2') {
@@ -1206,18 +1236,19 @@ int main() {
         HWND window = create_window(instance);
         initialize_d3d(window);
 
-        std::cout << "Stage 10 running: live PS2 preview with image controls.\n";
+        std::cout << "Stage 10 running: live PS2/Xbox 360 preview with image controls.\n";
         print_image_settings();
         std::cout << "Scaling filter: " << scaling_filter_name()
                   << " (Q cycles Nearest/Bilinear/Sharp bilinear).\n";
         std::cout << "Default mode: Fixed resolution.\n";
+        std::cout << "Aspect ratio: " << aspect_ratio_name() << " (A toggles 4:3/16:9).\n";
         print_selected_resolution();
-        std::cout << "HUD: selected output resolution + capture FPS in the top-left corner.\n";
-        std::cout << "Hotkeys: F11 fullscreen, Esc leave fullscreen, R output resolution, Q scaling filter.\n";
+        std::cout << "HUD: selected output resolution + aspect ratio + capture FPS in the top-left corner.\n";
+        std::cout << "Hotkeys: F11 fullscreen, Esc leave fullscreen, R output resolution, A aspect ratio, Q scaling filter.\n";
         std::cout << "          C BT.601/BT.709, L Limited/Full range, 0 reset image settings.\n";
         std::cout << "          B brightness, K contrast, G gamma, S saturation; hold Shift to decrease.\n";
-        std::cout << "          M cycle display modes, 1 Fit 4:3, 2 Fixed resolution, 3 Stretch.\n";
-        std::cout << "Fixed resolutions: 640x480, 960x720, 1280x960, 1920x1440.\n";
+        std::cout << "          M cycle display modes, 1 Fit aspect ratio, 2 Fixed resolution, 3 Stretch.\n";
+        std::cout << "Fixed resolution bounds: 640x480, 960x720, 1280x960, 1920x1440.\n";
         std::cout << "Audio uses the capture-card input and the current Windows default output device.\n";
         std::cout << "Close the window to exit.\n";
 
